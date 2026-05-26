@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Siglent SDM — Web</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header id="titlebar">
+    <span id="idn">connecting...</span>
+    <span id="conn" class="conn-dot">●</span>
+  </header>
+
+  <main>
+    <section id="lcd">
+      <div id="value-area">
+        <span id="value">---</span>
+        <span id="unit"></span>
+      </div>
+      <div id="range-tag"></div>
+    </section>
+
+    <aside id="side">
+      <div id="dial-area">
+        <div id="dial-label">AUTO</div>
+        <div id="dial">
+          <select id="range-select"></select>
+        </div>
+        <div id="mode-tag">DCI</div>
+      </div>
+    </aside>
+
+    <section id="modes">
+      <button class="mode-btn" data-mode="DCI">DCI<br><small>mA</small></button>
+      <button class="mode-btn" data-mode="ACI">ACI</button>
+      <button class="mode-btn" data-mode="VDC">VDC</button>
+      <button class="mode-btn" data-mode="VAC">VAC</button>
+      <button class="mode-btn" data-mode="RES">Ω</button>
+      <button class="mode-btn" data-mode="FREQ">Hz</button>
+      <button class="mode-btn" data-mode="CAP">CAP</button>
+    </section>
+
+    <section id="minmax">
+      <div class="mm-row">
+        <span class="mm-label">↑ max</span>
+        <span id="mm-max" class="mm-val">--</span>
+      </div>
+      <div class="mm-row">
+        <span class="mm-label">↓ min</span>
+        <span id="mm-min" class="mm-val">--</span>
+      </div>
+      <button id="mm-reset">Reset min/max</button>
+    </section>
+  </main>
+
+  <footer id="status">
+    <span id="status-text">idle</span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

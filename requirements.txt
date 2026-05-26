@@ -2,3 +2,7 @@ PyQt6
 pyqtgraph
 numpy
 xlsxwriter
+
+# Web app (FastAPI + uvicorn). Desktop app does not need these.
+fastapi
+uvicorn[standard]
