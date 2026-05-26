@@ -412,7 +412,7 @@ class Ui(QtWidgets.QMainWindow):
             self.SC_Button.clicked.connect(self.multi)
         elif SC_card == "NO":
             self.SC_Button.setFont(make_font('Noto Sans', 8))
-            self.SC_Button.setVisible(false)
+            self.SC_Button.setVisible(False)
             self.SC_Button.clicked.connect(self.multi)
             self.intervall_box.setVisible(False)
             self.Save_Button.setVisible(False)
