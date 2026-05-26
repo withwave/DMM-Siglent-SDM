@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 import sys
 from sys import argv
-import vxi11
+import socket
+import struct
 import time
 from time import sleep
 from datetime import datetime
@@ -112,10 +113,130 @@ except IndexError:
     TEMP_SET = "ROUT:"+TEMP_TYPE+"\nROUT:TEMP:UNIT "+TEMP_UNIT
 
 
+class SCPISocket:
+    """vxi11.Instrument-compatible raw SCPI socket (TCP port 5025).
+
+    Why raw SCPI instead of vxi11/RPC on Siglent SDM:
+      The SDM3055's VXI-11 daemon allows only one RPC link, and an
+      ungraceful client disconnect leaves it stuck for minutes. The raw
+      SCPI server on port 5025 has no such limit and recovers cleanly.
+    Safety:
+      - timeout matches vxi11.Instrument.timeout: SECONDS.
+      - SO_LINGER(0): close() sends TCP RST so the DMM frees its session
+        immediately (no FIN_WAIT_2 backlog).
+      - connect retries with backoff for the rare case where the device
+        is still mid-cleanup.
+      - The buffer desync that bit us in an earlier iteration is now
+        prevented at the caller side by a check_loop reentrant guard
+        and try/except around ask() in the 250 ms update loop, so each
+        request really does pair with one response.
+    """
+    def __init__(self, host, port=5025, connect_retries=6, retry_delay=3.0):
+        self._host = host
+        self._port = int(port)
+        last_err = None
+        for attempt in range(connect_retries):
+            try:
+                self._sock = socket.create_connection(
+                    (self._host, self._port), timeout=5)
+                break
+            except (ConnectionRefusedError, OSError) as e:
+                last_err = e
+                if attempt < connect_retries - 1:
+                    print(f"  SCPI connect refused, retry "
+                          f"{attempt+1}/{connect_retries} in {retry_delay}s...",
+                          file=sys.stderr)
+                    time.sleep(retry_delay)
+                else:
+                    raise
+        # SO_LINGER(onoff=1, linger=0) → close() sends RST instead of FIN.
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                              struct.pack('ii', 1, 0))
+        # vxi11.Instrument exposes .timeout in seconds; match that.
+        self._timeout_s = 5.0
+        self._sock.settimeout(self._timeout_s)
+        self._buf = b''
+
+    @property
+    def timeout(self):
+        return self._timeout_s
+
+    @timeout.setter
+    def timeout(self, seconds):
+        self._timeout_s = float(seconds)
+        self._sock.settimeout(self._timeout_s)
+
+    def write(self, cmd, encoding='utf-8'):
+        if not cmd.endswith('\n'):
+            cmd = cmd + '\n'
+        self._sock.sendall(cmd.encode(encoding))
+
+    def _readline(self):
+        # Wait up to full timeout for the first chunk, then drain quickly.
+        # Siglent commands like IDN-SGLT-PRI? reply without a trailing \n,
+        # so fall back to whatever the buffer holds once the socket idles.
+        saved = self._timeout_s
+        try:
+            while b'\n' not in self._buf:
+                try:
+                    chunk = self._sock.recv(4096)
+                except socket.timeout:
+                    break
+                if not chunk:
+                    break
+                self._buf += chunk
+                self._sock.settimeout(0.2)
+        finally:
+            self._sock.settimeout(saved)
+        if b'\n' in self._buf:
+            line, _, self._buf = self._buf.partition(b'\n')
+            return line
+        line, self._buf = self._buf, b''
+        return line
+
+    def ask(self, cmd, encoding='utf-8'):
+        self.write(cmd, encoding)
+        return self._readline().decode(encoding, errors='replace').rstrip('\r')
+
+    def read_raw(self):
+        """Parse IEEE 488.2 definite-length block: #<n><LLL...><data>[\\n]."""
+        while not self._buf:
+            chunk = self._sock.recv(65536)
+            if not chunk:
+                return b''
+            self._buf += chunk
+        if self._buf[:1] != b'#':
+            data, self._buf = self._buf, b''
+            return data
+        while len(self._buf) < 2:
+            self._buf += self._sock.recv(65536)
+        n = int(self._buf[1:2])
+        while len(self._buf) < 2 + n:
+            self._buf += self._sock.recv(65536)
+        length = int(self._buf[2:2 + n])
+        header_len = 2 + n
+        total_needed = header_len + length
+        while len(self._buf) < total_needed:
+            self._buf += self._sock.recv(65536)
+        data = bytes(self._buf[header_len:total_needed])
+        self._buf = self._buf[total_needed:]
+        if self._buf[:1] == b'\n':
+            self._buf = self._buf[1:]
+        return data
+
+    def close(self):
+        try:
+            self._sock.close()
+        except Exception:
+            pass
+
+
 def init_dmm():
     global instr, leer, SC_card, out_text
-    instr = vxi11.Instrument(HOST)
-    instr.timeout = 60*1000
+    instr = SCPISocket(HOST, PORT)
+    # 10 s during init for the IDN/CONF probes; tighten to 2 s after init
+    # for the 250 ms polling loop so a hiccup costs us one tick, not the UI.
+    instr.timeout = 10
     # instr.write("*RST; *CLS", encoding='utf-8')
     instr.write("TRIGGER:SOURCE IMMEDIATE;TRIGGER:COUNT 1;SAMPLE:COUNT 1;TRIG:DEL:AUTO 1", encoding='utf-8')
     print('Set Date:' + time.strftime('%Y-%m-%d'))
@@ -146,6 +267,10 @@ def init_dmm():
         out_text = "DMM 6½ Digits 2200000 Counts"
     print(out_text)
     print("Siglent IDN: "+instr.ask("IDN-SGLT-PRI?", encoding='utf-8'))
+    # Tighten timeout for the 250 ms polling loop — a normal READ? answers
+    # in tens of ms, so 2 s is well above the noise floor while keeping
+    # any genuine stall from freezing the UI for more than a single tick.
+    instr.timeout = 2
 
 
 try:
@@ -2126,6 +2251,12 @@ class Ui(QtWidgets.QMainWindow):
 
     def update(self):
         global run_stop, G_timer, G_intervall, G_start, scan_timer, scan_loop_toggle, scan_loop, wert_limit, wert_raw, limit_switch, limit_disable, low_fail, up_fail, upper, lower, upper_val, lower_val, db_switch, db_bak, ntc_wert, ntc_switch, f1_start, null_ref, null_switch, shot, check_loop, cold_boot, HOST, PORT, SCREEN, SN_SHOW, VDC, VAC, AC, AAC, RES, RES_display, TEMP_RDT_TYPE, CAP, DC_filter, iz_filter, leer, scan_text, funktion, bereich, bereich_raw, dot_on, funktion_raw, funktion_set, rad, komma, komma_plus, nk, mess_alt, x, y, messungen, graph, xy_counter, datetimes, pen, max_mess, min_mess, mess_art, scanner, wert
+        # Reentrant guard: a slow SCPI ask() can block the UI thread past
+        # the next timer tick; without this, two update()s pile up and the
+        # DMM gets two READ?s competing for one reply.
+        if check_loop == 1:
+            return
+        check_loop = 1
         now = datetime.now()
         save_timer = int(round(time.time()))
         G_timer = int(round(time.time()))
@@ -2135,7 +2266,14 @@ class Ui(QtWidgets.QMainWindow):
         self.timer_single.stop()
         now = datetime.now()
         timestamp = "%02d:%02d:%02d" % (now.hour, now.minute, now.second)
-        self.get_funktion()
+        try:
+            self.get_funktion()
+        except Exception as e:
+            print(f"  get_funktion skipped: {type(e).__name__}: {e}",
+                  file=sys.stderr)
+            check_loop = 0
+            self.timer_single.start(250)
+            return
         if cold_boot == 0 and funktion_raw != mess_alt and graph == 1:
             self.graphic()
         if cold_boot == 0 and funktion_raw != mess_alt and ntc_switch == 1:
@@ -2143,7 +2281,16 @@ class Ui(QtWidgets.QMainWindow):
             self.ntc()
         if cold_boot == 0 and funktion_raw != mess_alt and null_switch == 1:
             self.f6_click()
-        wert = round(float(instr.ask("READ?", encoding='utf-8')), 12)
+        try:
+            wert = round(float(instr.ask("READ?", encoding='utf-8')), 12)
+        except Exception as e:
+            # Keep previous reading on transient failure; release the guard
+            # and reschedule so the next tick gets a fresh shot at the DMM.
+            print(f"  READ? skipped: {type(e).__name__}: {e}",
+                  file=sys.stderr)
+            check_loop = 0
+            self.timer_single.start(250)
+            return
         wert_raw = wert
         if funktion == 'Hz':
             nk = 1
@@ -2329,13 +2476,21 @@ class Ui(QtWidgets.QMainWindow):
             self.SCloop_Button.setProperty("text", "Scanner Loop\nOFF..."+str(int(scan_timer - save_timer)) + " s")
             self.SCrun_Button.setVisible(False)
         if shot == 1:
-            instr.write("SCDP")
-            self.result_str = instr.read_raw()
-            self.pixmap.loadFromData(self.result_str)
-            self.screenshot.setPixmap(self.pixmap)
+            try:
+                instr.write("SCDP")
+                self.result_str = instr.read_raw()
+                self.pixmap.loadFromData(self.result_str)
+                self.screenshot.setPixmap(self.pixmap)
+            except Exception as e:
+                print(f"  SCDP screenshot skipped: {type(e).__name__}: {e}",
+                      file=sys.stderr)
 
         check_loop = 0
-        self.timer_single.start(0)
+        # Was start(0): hammered the DMM as fast as the network allowed,
+        # which on macOS occasionally outpaced its SCPI parser and caused
+        # the device + UI to hang. 250 ms is the original timer period
+        # and matches the .start(250) at the end of Ui.__init__.
+        self.timer_single.start(250)
 
 
 EXIT_CODE_REBOOT = -11231351
