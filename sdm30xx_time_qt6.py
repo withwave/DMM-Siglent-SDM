@@ -4,6 +4,7 @@ import sys
 from sys import argv
 import socket
 import struct
+import threading
 import time
 from time import sleep
 from datetime import datetime
@@ -139,6 +140,9 @@ class SCPISocket:
         # vxi11.Instrument exposes .timeout in seconds; match that.
         self._timeout_s = 5.0
         self._buf = b''
+        # Re-entrant: a button handler that calls ask() must not deadlock
+        # if the same call later hits self._drain or self._reconnect.
+        self._lock = threading.RLock()
         self._connect()
 
     def _connect(self):
@@ -200,9 +204,10 @@ class SCPISocket:
         self._sock.settimeout(self._timeout_s)
 
     def write(self, cmd, encoding='utf-8'):
-        if not cmd.endswith('\n'):
-            cmd = cmd + '\n'
-        self._sock.sendall(cmd.encode(encoding))
+        with self._lock:
+            if not cmd.endswith('\n'):
+                cmd = cmd + '\n'
+            self._sock.sendall(cmd.encode(encoding))
 
     def _readline(self):
         # Wait up to full timeout for the first chunk, then drain quickly.
@@ -232,48 +237,80 @@ class SCPISocket:
         # send the new command. Without this, after one slow READ? every
         # subsequent ask() reads the wrong reply and we spiral into the
         # "could not convert string to float: ''" loop that froze the UI.
-        self._drain()
-        try:
-            self.write(cmd, encoding)
-            reply = self._readline().decode(encoding, errors='replace').rstrip('\r')
-        except (socket.timeout, OSError, ConnectionError):
-            # Socket is in an unknown state; rebuild it so the next call
-            # has a clean framing point.
-            self._reconnect()
-            raise
-        # An empty reply also implies the response went somewhere we cannot
-        # see (idle timeout, partial buffer); force a reconnect so the next
-        # caller starts fresh rather than chasing a desynced stream.
-        if reply == '':
-            self._reconnect()
-            raise IOError("empty SCPI reply, socket resynced")
-        return reply
+        with self._lock:
+            self._drain()
+            try:
+                self.write(cmd, encoding)
+                reply = self._readline().decode(encoding, errors='replace').rstrip('\r')
+            except (socket.timeout, OSError, ConnectionError):
+                # Socket is in an unknown state; rebuild it so the next
+                # call has a clean framing point.
+                self._reconnect()
+                raise
+            # An empty reply also implies the response went somewhere we
+            # cannot see (idle timeout, partial buffer); force a reconnect
+            # so the next caller starts fresh rather than chasing a
+            # desynced stream.
+            if reply == '':
+                self._reconnect()
+                raise IOError("empty SCPI reply, socket resynced")
+            # Sanity check: if the reply starts with a non-printable byte
+            # we are reading binary leftover from a previous SCDP/read_raw
+            # call. Reconnect rather than hand garbage to float().
+            if reply and reply[0] < ' ' and reply[0] != '\t':
+                self._reconnect()
+                raise IOError(f"binary garbage on SCPI stream, socket "
+                              f"resynced (prefix={reply[:8]!r})")
+            return reply
 
     def read_raw(self):
-        """Parse IEEE 488.2 definite-length block: #<n><LLL...><data>[\\n]."""
-        while not self._buf:
-            chunk = self._sock.recv(65536)
-            if not chunk:
-                return b''
-            self._buf += chunk
-        if self._buf[:1] != b'#':
-            data, self._buf = self._buf, b''
+        """Read a binary SCPI reply (e.g. SCDP screenshot). The DMM may or
+        may not use IEEE 488.2 definite-length framing (#NLLL...data), so
+        be defensive: read what we can, then unconditionally reconnect to
+        guarantee the next ask() starts on a clean stream. Without this
+        reconnect, any unread tail of the screenshot blob would surface as
+        binary garbage in the very next SCPI reply (which is exactly the
+        crash the user hit when clicking the Limit button right after
+        SC-Shot)."""
+        with self._lock:
+            try:
+                while not self._buf:
+                    chunk = self._sock.recv(65536)
+                    if not chunk:
+                        return b''
+                    self._buf += chunk
+                if self._buf[:1] == b'#':
+                    while len(self._buf) < 2:
+                        self._buf += self._sock.recv(65536)
+                    n = int(self._buf[1:2])
+                    while len(self._buf) < 2 + n:
+                        self._buf += self._sock.recv(65536)
+                    length = int(self._buf[2:2 + n])
+                    header_len = 2 + n
+                    total_needed = header_len + length
+                    while len(self._buf) < total_needed:
+                        self._buf += self._sock.recv(65536)
+                    data = bytes(self._buf[header_len:total_needed])
+                else:
+                    # No SCPI block header — read until the socket goes
+                    # idle, then take everything as the payload.
+                    self._sock.settimeout(0.5)
+                    try:
+                        while True:
+                            chunk = self._sock.recv(65536)
+                            if not chunk:
+                                break
+                            self._buf += chunk
+                    except (socket.timeout, BlockingIOError):
+                        pass
+                    finally:
+                        self._sock.settimeout(self._timeout_s)
+                    data = bytes(self._buf)
+            finally:
+                # Whatever we did, the stream framing is now ambiguous.
+                # Rebuild the socket so the next ask() is guaranteed clean.
+                self._reconnect()
             return data
-        while len(self._buf) < 2:
-            self._buf += self._sock.recv(65536)
-        n = int(self._buf[1:2])
-        while len(self._buf) < 2 + n:
-            self._buf += self._sock.recv(65536)
-        length = int(self._buf[2:2 + n])
-        header_len = 2 + n
-        total_needed = header_len + length
-        while len(self._buf) < total_needed:
-            self._buf += self._sock.recv(65536)
-        data = bytes(self._buf[header_len:total_needed])
-        self._buf = self._buf[total_needed:]
-        if self._buf[:1] == b'\n':
-            self._buf = self._buf[1:]
-        return data
 
     def close(self):
         try:
