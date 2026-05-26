@@ -134,27 +134,60 @@ class SCPISocket:
     def __init__(self, host, port=5025, connect_retries=6, retry_delay=3.0):
         self._host = host
         self._port = int(port)
+        self._connect_retries = connect_retries
+        self._retry_delay = retry_delay
+        # vxi11.Instrument exposes .timeout in seconds; match that.
+        self._timeout_s = 5.0
+        self._buf = b''
+        self._connect()
+
+    def _connect(self):
         last_err = None
-        for attempt in range(connect_retries):
+        for attempt in range(self._connect_retries):
             try:
                 self._sock = socket.create_connection(
                     (self._host, self._port), timeout=5)
                 break
             except (ConnectionRefusedError, OSError) as e:
                 last_err = e
-                if attempt < connect_retries - 1:
+                if attempt < self._connect_retries - 1:
                     print(f"  SCPI connect refused, retry "
-                          f"{attempt+1}/{connect_retries} in {retry_delay}s...",
-                          file=sys.stderr)
-                    time.sleep(retry_delay)
+                          f"{attempt+1}/{self._connect_retries} in "
+                          f"{self._retry_delay}s...", file=sys.stderr)
+                    time.sleep(self._retry_delay)
                 else:
                     raise
-        # SO_LINGER(onoff=1, linger=0) → close() sends RST instead of FIN.
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
                               struct.pack('ii', 1, 0))
-        # vxi11.Instrument exposes .timeout in seconds; match that.
-        self._timeout_s = 5.0
         self._sock.settimeout(self._timeout_s)
+        self._buf = b''
+
+    def _reconnect(self):
+        """Tear the socket down and reopen. Called after any timeout or
+        decode failure so the next ask() starts with clean framing."""
+        try:
+            self._sock.close()
+        except Exception:
+            pass
+        self._buf = b''
+        self._connect()
+
+    def _drain(self):
+        """Discard any bytes already sitting on the socket from a previous
+        timed-out response. Must run before every send or the next ask()
+        will read a stale reply meant for a previous command."""
+        self._sock.settimeout(0)
+        try:
+            while True:
+                chunk = self._sock.recv(4096)
+                if not chunk:
+                    break
+        except (BlockingIOError, socket.timeout):
+            pass
+        except OSError:
+            pass
+        finally:
+            self._sock.settimeout(self._timeout_s)
         self._buf = b''
 
     @property
@@ -195,8 +228,26 @@ class SCPISocket:
         return line
 
     def ask(self, cmd, encoding='utf-8'):
-        self.write(cmd, encoding)
-        return self._readline().decode(encoding, errors='replace').rstrip('\r')
+        # Drain any stale bytes from a previously timed-out response, then
+        # send the new command. Without this, after one slow READ? every
+        # subsequent ask() reads the wrong reply and we spiral into the
+        # "could not convert string to float: ''" loop that froze the UI.
+        self._drain()
+        try:
+            self.write(cmd, encoding)
+            reply = self._readline().decode(encoding, errors='replace').rstrip('\r')
+        except (socket.timeout, OSError, ConnectionError):
+            # Socket is in an unknown state; rebuild it so the next call
+            # has a clean framing point.
+            self._reconnect()
+            raise
+        # An empty reply also implies the response went somewhere we cannot
+        # see (idle timeout, partial buffer); force a reconnect so the next
+        # caller starts fresh rather than chasing a desynced stream.
+        if reply == '':
+            self._reconnect()
+            raise IOError("empty SCPI reply, socket resynced")
+        return reply
 
     def read_raw(self):
         """Parse IEEE 488.2 definite-length block: #<n><LLL...><data>[\\n]."""
