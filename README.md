@@ -82,7 +82,37 @@ uvicorn web_app:app --host 0.0.0.0 --port 8000
 코드 구성:
 - `web_app.py` — FastAPI 앱, 폴링 task, WebSocket broadcast, REST API
 - `web/index.html`, `web/style.css`, `web/app.js` — 정적 프론트엔드
+- `web/manifest.json`, `web/sw.js` — PWA manifest + Service Worker
 - `scpi.py` — SCPISocket transport (데스크톱/웹 공유)
+
+### 데스크톱 앱처럼 실행하기 (PyQt 없이)
+
+브라우저는 그대로 두고, 같은 웹앱을 "앱처럼" 띄우는 방법 두 가지:
+
+**방법 A — `launch.py`로 chromeless 윈도우 (가장 간단)**
+```bash
+cd ~/AI/DMM-Siglent-SDM
+source .venv/bin/activate
+python3 launch.py            # 로컬에서만
+python3 launch.py --lan      # 다른 기기도 접근 가능하게
+```
+- uvicorn을 자동 시작하고 Chrome/Edge/Brave를 `--app` 모드로 띄움 — 탭/주소창 없는 standalone 윈도우
+- Ctrl-C로 종료 시 DMM Remote Lock 해제 후 정리
+
+**방법 B — PWA 설치 (브라우저에서 "앱으로 설치")**
+
+먼저 서버 띄우기:
+```bash
+uvicorn web_app:app --host 0.0.0.0 --port 8000
+```
+
+그 다음 브라우저에서 `http://localhost:8000` 열고:
+- **Chrome / Edge**: 주소창 우측 끝의 ⊕ 설치 아이콘 클릭, 또는 메뉴 → "Siglent SDM Web 설치"
+- **Brave**: 메뉴 → 앱 → 바로가기 만들기 → "창에서 열기"
+- **iOS Safari**: 공유 → 홈 화면에 추가
+- **Android Chrome**: 메뉴 → 홈 화면에 추가
+
+설치 후엔 도크/홈에 아이콘이 생기고 standalone 창으로 열림. 같은 LAN의 폰/태블릿에서도 `http://<이 컴퓨터 IP>:8000` 으로 동일하게 설치 가능 (단 Chrome 데스크톱은 비-HTTPS LAN URL은 설치 거부할 수 있음 — 그땐 방법 A 사용).
 
 ### 만약 DMM이 응답하지 않으면 (Remote Lock / Stuck)
 

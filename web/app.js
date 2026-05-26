@@ -343,6 +343,28 @@ $('range-select').addEventListener('change', (e) => {
 });
 $('mm-reset').addEventListener('click', resetMinMax);
 
+// --- PWA install prompt ---
+// Chrome fires beforeinstallprompt when the page meets PWA criteria
+// (manifest + service worker + secure origin = localhost or HTTPS).
+// We stash it and reveal an "Install" button so the user can launch
+// the standalone window without going through the address bar menu.
+let deferredInstall = null;
+const installBtn = $('install-btn');
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstall = e;
+  installBtn.hidden = false;
+});
+installBtn.addEventListener('click', async () => {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  await deferredInstall.userChoice;
+  deferredInstall = null;
+  installBtn.hidden = true;
+});
+// Already installed — Chrome reports this on launch. iOS uses Share -> Add to Home Screen.
+window.addEventListener('appinstalled', () => { installBtn.hidden = true; });
+
 (async () => {
   try { await fetchInfo(); } catch (e) { log(`info failed: ${e.message}`, true); }
   openWS();

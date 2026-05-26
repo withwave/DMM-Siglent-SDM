@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Siglent SDM">
+  <rect width="512" height="512" rx="64" fill="#2b2b2b"/>
+  <rect x="40" y="76" width="432" height="240" rx="14" fill="#aaff00"/>
+  <text x="256" y="248" font-family="Menlo, 'DejaVu Sans Mono', monospace"
+        font-weight="700" font-size="148" text-anchor="middle" fill="#000">mA</text>
+  <text x="256" y="402" font-family="-apple-system, 'Helvetica Neue', sans-serif"
+        font-weight="700" font-size="62" text-anchor="middle" fill="#aaff00"
+        letter-spacing="4">SIGLENT</text>
+  <text x="256" y="464" font-family="-apple-system, 'Helvetica Neue', sans-serif"
+        font-weight="400" font-size="38" text-anchor="middle" fill="#888"
+        letter-spacing="6">SDM3055</text>
+</svg>

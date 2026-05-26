@@ -33,6 +33,19 @@ html, body {
 #conn { color: #ff5555; transition: color 0.3s; }
 #conn.ok { color: #aaff00; }
 
+#install-btn {
+  background: var(--accent);
+  color: black;
+  border: none;
+  border-radius: 4px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-left: 10px;
+}
+#install-btn:hover { filter: brightness(1.1); }
+
 main {
   display: grid;
   grid-template-columns: 1fr 220px;

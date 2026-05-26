@@ -218,6 +218,19 @@ async def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 
+# PWA: service worker has to live at site root so it can claim the
+# whole origin as its scope; manifest is conventionally at root too.
+@app.get("/sw.js")
+async def service_worker():
+    return FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript")
+
+
+@app.get("/manifest.json")
+async def manifest():
+    return FileResponse(STATIC_DIR / "manifest.json",
+                        media_type="application/manifest+json")
+
+
 @app.get("/api/info")
 async def info():
     return {

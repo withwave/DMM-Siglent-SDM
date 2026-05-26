@@ -1,0 +1,24 @@
+{
+  "name": "Siglent SDM Web",
+  "short_name": "SDM",
+  "description": "Browser-based control + readout for Siglent SDM3055/3065.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#2b2b2b",
+  "theme_color": "#aaff00",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icon-128.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

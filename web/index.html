@@ -2,14 +2,22 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#aaff00">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SDM">
 <title>Siglent SDM — Web</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/svg+xml" href="/static/icon.svg">
+<link rel="apple-touch-icon" href="/static/icon-128.png">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header id="titlebar">
     <span id="idn">connecting...</span>
     <span id="conn" class="conn-dot">●</span>
+    <button id="install-btn" hidden>Install</button>
   </header>
 
   <main>
@@ -78,5 +86,12 @@
   </footer>
 
   <script src="/static/app.js"></script>
+  <script>
+    // Register the PWA service worker (best-effort - the page works fine
+    // without it, this just enables "Install" + offline shell caching).
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => { /* no-op */ });
+    }
+  </script>
 </body>
 </html>

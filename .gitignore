@@ -10,3 +10,6 @@ env/
 
 *.log
 /tmp/
+
+# Chromium --app user-data dir created by launch.py
+.browser-profile/
