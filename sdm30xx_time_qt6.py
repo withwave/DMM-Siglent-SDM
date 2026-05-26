@@ -1,4 +1,4 @@
-#!/usr/bin python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import sys
 from sys import argv
@@ -111,38 +111,80 @@ except IndexError:
     print("multimeter.ini File: HOST=" + HOST + ", PORT=" + str(PORT) + "\n")
     TEMP_SET = "ROUT:"+TEMP_TYPE+"\nROUT:TEMP:UNIT "+TEMP_UNIT
 
-instr = vxi11.Instrument(HOST)
-instr.timeout = 60*1000
-# instr.write("*RST; *CLS", encoding='utf-8')
-instr.write("TRIGGER:SOURCE IMMEDIATE;TRIGGER:COUNT 1;SAMPLE:COUNT 1;TRIG:DEL:AUTO 1", encoding='utf-8')
-print('Set Date:' + time.strftime('%Y-%m-%d'))
-print('Set Time:' + time.strftime('%H:%M:%S'))
-instr.write(':SYST:DATE ' + time.strftime('%Y%m%d'))
-instr.write(':SYST:TIME ' + time.strftime('%H%M%S'))
+def init_dmm():
+    global instr, leer, SC_card, out_text
+    instr = vxi11.Instrument(HOST)
+    instr.timeout = 60*1000
+    # instr.write("*RST; *CLS", encoding='utf-8')
+    instr.write("TRIGGER:SOURCE IMMEDIATE;TRIGGER:COUNT 1;SAMPLE:COUNT 1;TRIG:DEL:AUTO 1", encoding='utf-8')
+    print('Set Date:' + time.strftime('%Y-%m-%d'))
+    print('Set Time:' + time.strftime('%H:%M:%S'))
+    instr.write(':SYST:DATE ' + time.strftime('%Y%m%d'))
+    instr.write(':SYST:TIME ' + time.strftime('%H%M%S'))
 
-leer = instr.ask("*IDN?", encoding='utf-8')
-if SN_SHOW == '0':
-    idn_text = []
-    idn_text = leer.split(',')
-    leer = leer.replace(str(idn_text[2]), "xxxxxxx")
+    leer = instr.ask("*IDN?", encoding='utf-8')
+    if SN_SHOW == '0':
+        idn_text = []
+        idn_text = leer.split(',')
+        leer = leer.replace(str(idn_text[2]), "xxxxxxx")
 
-if instr.ask("ROUTe:STATe?", encoding='utf-8') == 'OFF':
-    print("ScanCard installed: NO")
-    SC_card = 'NO'
-elif instr.ask("ROUTe:STATe?", encoding='utf-8') == 'ON':
-    print("ScanCard installed: YES")
-    SC_card = 'YES'
-print("DMM Date:", instr.ask("SYSTem:DATE?", encoding='utf-8'))
-print("DMM Time:", instr.ask("SYSTem:TIME?", encoding='utf-8'))
-# SC_card = 'NO'
-if "SDM3045" in leer:
-    out_text = "DMM 4½ Digits 60000 Counts"
-elif "SDM3055" in leer:
-    out_text = "DMM 5½ Digits 240000 Counts"
-elif "SDM3065" in leer:
-    out_text = "DMM 6½ Digits 2200000 Counts"
-print(out_text)
-print("Siglent IDN: "+instr.ask("IDN-SGLT-PRI?", encoding='utf-8'))
+    if instr.ask("ROUTe:STATe?", encoding='utf-8') == 'OFF':
+        print("ScanCard installed: NO")
+        SC_card = 'NO'
+    elif instr.ask("ROUTe:STATe?", encoding='utf-8') == 'ON':
+        print("ScanCard installed: YES")
+        SC_card = 'YES'
+    print("DMM Date:", instr.ask("SYSTem:DATE?", encoding='utf-8'))
+    print("DMM Time:", instr.ask("SYSTem:TIME?", encoding='utf-8'))
+    # SC_card = 'NO'
+    if "SDM3045" in leer:
+        out_text = "DMM 4½ Digits 60000 Counts"
+    elif "SDM3055" in leer:
+        out_text = "DMM 5½ Digits 240000 Counts"
+    elif "SDM3065" in leer:
+        out_text = "DMM 6½ Digits 2200000 Counts"
+    print(out_text)
+    print("Siglent IDN: "+instr.ask("IDN-SGLT-PRI?", encoding='utf-8'))
+
+
+try:
+    init_dmm()
+except Exception as e:
+    msg = (
+        f"DMM connection failed: HOST={HOST} PORT={PORT}\n"
+        f"{type(e).__name__}: {e}\n\n"
+        "Check multimeter.ini and network connectivity."
+    )
+    print(msg, file=sys.stderr)
+    try:
+        _app = QApplication.instance() or QApplication(sys.argv)
+        QMessageBox.critical(None, "DMM Connection Failed", msg)
+    except Exception:
+        pass
+    sys.exit(1)
+
+
+_font_families_cache = None
+_font_cache = {}
+
+def make_font(family_hint, size):
+    global _font_families_cache
+    key = (family_hint, size)
+    if key in _font_cache:
+        return _font_cache[key]
+    if _font_families_cache is None:
+        _font_families_cache = set(QFontDatabase.families())
+    if family_hint in _font_families_cache:
+        f = QFont(family_hint, size)
+    else:
+        f = QFont()
+        if 'Mono' in family_hint or 'Monospace' in family_hint:
+            f.setStyleHint(QFont.StyleHint.Monospace)
+        else:
+            f.setStyleHint(QFont.StyleHint.SansSerif)
+        f.setPointSize(size)
+    _font_cache[key] = f
+    return f
 
 
 class Ui(QtWidgets.QMainWindow):
@@ -153,30 +195,30 @@ class Ui(QtWidgets.QMainWindow):
 
         self.menubar.setStyleSheet("background-color: #5a5a5a; selection-background-color: #55aaff; color: rgb(255,255,255); selection-color: black;")
 
-        self.F1_Button.setFont(QFont('Noto Sans', 8))
+        self.F1_Button.setFont(make_font('Noto Sans', 8))
         self.F1_Button.setProperty("text", " ")
         self.F1_Button.clicked.connect(self.f1_click)
-        self.F2_Button.setFont(QFont('Noto Sans', 8))
+        self.F2_Button.setFont(make_font('Noto Sans', 8))
         self.F2_Button.setProperty("text", " ")
         self.F2_Button.clicked.connect(self.f2_click)
-        self.F3_Button.setFont(QFont('Noto Sans', 8))
+        self.F3_Button.setFont(make_font('Noto Sans', 8))
         self.F3_Button.setProperty("text", " ")
         self.F3_Button.clicked.connect(self.f3_click)
-        self.F4_Button.setFont(QFont('Noto Sans', 8))
+        self.F4_Button.setFont(make_font('Noto Sans', 8))
         self.F4_Button.setProperty("text", " ")
         self.F4_Button.clicked.connect(self.f4_click)
-        self.F5_Button.setFont(QFont('Noto Sans', 8))
+        self.F5_Button.setFont(make_font('Noto Sans', 8))
         self.F5_Button.setProperty("text", "Graph Off\nOn")
         self.F5_Button.clicked.connect(self.graphic)
-        self.F6_Button.setFont(QFont('Noto Sans', 8))
+        self.F6_Button.setFont(make_font('Noto Sans', 8))
         self.F6_Button.setProperty("text", " ")
         self.F6_Button.clicked.connect(self.f6_click)
         self.SCShot_Button.clicked.connect(self.scshot)
-        self.SCShot_Button.setFont(QFont('Noto Sans', 8))
+        self.SCShot_Button.setFont(make_font('Noto Sans', 8))
         self.SCShot_Button.setProperty("text", "Live SC-Shot\nOn")
         self.SCShot_Button.setProperty("toolTip", "Screenshot On OFF")
 
-        self.PTC_Button.setFont(QFont('Noto Sans', 8))
+        self.PTC_Button.setFont(make_font('Noto Sans', 8))
         self.PTC_Button.setText("Funktion\nNTC 10kΩ")
         self.PTC_Button.clicked.connect(self.ntc)
         self.PTC_Button.setVisible(False)
@@ -184,17 +226,17 @@ class Ui(QtWidgets.QMainWindow):
         self.lcdDual.setVisible(False)
         self.zeitText.setVisible(False)
         self.lcdText1.setVisible(True)
-        self.lcdText1.setFont(QFont('DejaVu Sans Mono', 24))
+        self.lcdText1.setFont(make_font('DejaVu Sans Mono', 24))
         self.dbText.setVisible(False)
         self.offsetText.setVisible(False)
 
-        self.LCD_Dot.setFont(QFont('DejaVu Sans Mono', 14))
+        self.LCD_Dot.setFont(make_font('DejaVu Sans Mono', 14))
 
         self.db_widget.setVisible(False)
-        self.lcd_dial.setFont(QFont('DejaVu Sans Mono', 9))
+        self.lcd_dial.setFont(make_font('DejaVu Sans Mono', 9))
 
         self.limit_widget.setVisible(True)
-        self.limit_Button.setFont(QFont('Noto Sans', 8))
+        self.limit_Button.setFont(make_font('Noto Sans', 8))
         self.limit_Button.setText("Limit Off\nOn")
         self.limit_Button.clicked.connect(self.limit)
         self.u_limit_calc.setProperty("toolTip", "Set upper limit: x(.,)xxx - p,n,u,µ,m,k,M,G")
@@ -286,17 +328,17 @@ class Ui(QtWidgets.QMainWindow):
         self.SCconfig_Button.clicked.connect(self.config_write_channals)
         self.SCconfig_Button.setText("Save all Mode\nSettings")
         self.SCconfig_Button.setStyleSheet("background-color: #5a5a5a; color: #880000;")
-        self.SCrun_Button.setFont(QFont('Noto Sans', 8))
+        self.SCrun_Button.setFont(make_font('Noto Sans', 8))
         self.SCrun_Button.setProperty("text", "Scanner ON")
         self.SCrun_Button.clicked.connect(self.SCrun)
-        self.SCloop_Button.setFont(QFont('Noto Sans', 7))
+        self.SCloop_Button.setFont(make_font('Noto Sans', 7))
         self.SCloop_Button.setProperty("text", "Scanner Loop\nSingle SLOW 120s")
         self.SCloop_Button.clicked.connect(self.scanner_loop)
-        self.SCloop_all_Button.setFont(QFont('Noto Sans', 7))
+        self.SCloop_all_Button.setFont(make_font('Noto Sans', 7))
         self.SCloop_all_Button.setProperty("text", "Scanner Loop\nAll FAST")
         self.SCloop_all_Button.clicked.connect(self.scanner_loop_all)
 
-        self.intervall_box.setFont(QFont('Noto Sans', 8))
+        self.intervall_box.setFont(make_font('Noto Sans', 8))
         self.intervall_box.addItem('60 s')
         self.intervall_box.addItem('120 s')
         self.intervall_box.addItem('240 s')
@@ -308,12 +350,12 @@ class Ui(QtWidgets.QMainWindow):
         self.intervall_box.currentIndexChanged.connect(self.save_change)
         self.intervall_box.setStyleSheet("color: white; background-color: #5a5a5a; selection-background-color: blue;")
 
-        self.Save_Button.setFont(QFont('Noto Sans', 8))
+        self.Save_Button.setFont(make_font('Noto Sans', 8))
         self.Save_Button.setStyleSheet("background-color: #5a5a5a; color: #ffffff;")
         self.Save_Button.clicked.connect(self.save)
         self.Save_Button.setProperty("toolTip", "Save Scan to Excel/LibreOffice File")
 
-        self.G_intervall_box.setFont(QFont('Noto Sans', 8))
+        self.G_intervall_box.setFont(make_font('Noto Sans', 8))
         self.G_intervall_box.addItem('0 s')
         self.G_intervall_box.addItem('1 s')
         self.G_intervall_box.addItem('5 s')
@@ -337,7 +379,7 @@ class Ui(QtWidgets.QMainWindow):
         self.textEdit.setStyleSheet("background-color: #464646; color: #ffffff;")
         self.Clear_Button.clicked.connect(self.clear)
         self.Clear_Button.setText("Clear Text")
-        self.t_Save_Button.setFont(QFont('Noto Sans', 8))
+        self.t_Save_Button.setFont(make_font('Noto Sans', 8))
         self.t_Save_Button.setStyleSheet("background-color: #5a5a5a; color: #880000;")
         self.t_Save_Button.setText("Save CSV")
         self.t_Save_Button.clicked.connect(self.t_save)
@@ -365,11 +407,11 @@ class Ui(QtWidgets.QMainWindow):
         self.screenshot.setPixmap(self.pixmap)
 
         if SC_card == "YES":
-            self.SC_Button.setFont(QFont('Noto Sans', 8))
+            self.SC_Button.setFont(make_font('Noto Sans', 8))
             self.SC_Button.setVisible(True)
             self.SC_Button.clicked.connect(self.multi)
         elif SC_card == "NO":
-            self.SC_Button.setFont(QFont('Noto Sans', 8))
+            self.SC_Button.setFont(make_font('Noto Sans', 8))
             self.SC_Button.setVisible(false)
             self.SC_Button.clicked.connect(self.multi)
             self.intervall_box.setVisible(False)
@@ -527,7 +569,7 @@ class Ui(QtWidgets.QMainWindow):
                     self.warte(w_t, i, " ")
                     instr.write("ROUTe:STARt OFF", encoding='utf-8')
                 self.dbText.setVisible(True)
-                self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 36))
+                self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 36))
                 if getattr(self, "CH_checkBox_" + str(i)).isChecked() == True:
                     dummy = instr.ask("ROUTe:DATA? "+str(i), encoding='utf-8')
                     dummy = dummy.replace(',', '')
@@ -549,12 +591,12 @@ class Ui(QtWidgets.QMainWindow):
                         if "K" in dummy_1[2]:
                             dummy_1[1] = 'K   '
                     if wert >= 9.9E+34:
-                        self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 36))
+                        self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 36))
                         fo_string = "Overload"
                         dummy_1[1] = ""
                         dummy_a[0] = ""
                     if wert >= 9.9E+37:
-                        self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 36))
+                        self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 36))
                         fo_string = "Open"
                         dummy_1[1] = ""
                         dummy_a[0] = ""
@@ -694,7 +736,7 @@ class Ui(QtWidgets.QMainWindow):
                 if getattr(self, "CH_checkBox_" + str(i)).isChecked() == True:
 
                     self.dbText.setVisible(False)
-                    self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 60))
+                    self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 60))
                     dummy = instr.ask("ROUTe:DATA? "+str(i), encoding='utf-8')
                     dummy = dummy.replace(',', '')
                     dummy = dummy.replace('  ', ' ')
@@ -755,7 +797,7 @@ class Ui(QtWidgets.QMainWindow):
                 if getattr(self, "CH_checkBox_" + str(i)).isChecked() == True:
 
                     self.dbText.setVisible(False)
-                    self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 60))
+                    self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 60))
                     dummy = instr.ask("ROUTe:DATA? "+str(i), encoding='utf-8')
                     dummy = dummy.replace(',', '')
                     dummy = dummy.replace('  ', ' ')
@@ -779,12 +821,12 @@ class Ui(QtWidgets.QMainWindow):
                         if "K" in dummy_1[2]:
                             dummy_1[1] = 'K   '
                     if wert >= 9.9E+34:
-                        self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 36))
+                        self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 36))
                         fo_string = "Overload"
                         dummy_1[1] = ""
                         dummy_a[0] = ""
                     if wert >= 9.9E+37:
-                        self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 36))
+                        self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 36))
                         fo_string = "Open"
                         dummy_1[1] = ""
                         dummy_a[0] = ""
@@ -851,7 +893,7 @@ class Ui(QtWidgets.QMainWindow):
             instr.write(funktion_set, encoding='utf-8')
             instr.write("TRIGger:DELay:AUTO ON", encoding='utf-8')
             self.SCconfig_Button.setVisible(True)
-            self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 60))
+            self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 60))
 
     def scanner_loop(self):
         global sa_intervall, scan_timer, scan_loop_toggle, scan_loop, scanner_run, scanner_on, scanner_auswahl, scanner_auswahl_i, ntc_wert, ntc_switch, f1_start, null_ref, null_switch, shot, check_loop, cold_boot, HOST, PORT, SCREEN, SN_SHOW, VDC, VAC, AC, AAC, RES, RES_display, TEMP_RDT_TYPE, CAP, DC_filter, iz_filter, leer, scan_text, funktion, bereich, bereich_raw, dot_on, funktion_raw, funktion_set, rad, komma, komma_plus, nk, mess_alt, x, y, messungen, graph, xy_counter, datetimes, pen, max_mess, min_mess, mess_art, scanner, wert
@@ -965,7 +1007,7 @@ class Ui(QtWidgets.QMainWindow):
                     check_loop = 0
                     save_start = int(round(time.time())) + save_intervall
                     self.SCrun_Button.setProperty("text", b_text+"\n"+str(int(zeit_s - save_loop)) + " s")
-                    self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 36))
+                    self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 36))
                     self.lcdNumber.setText("Countdown: " + str(int(zeit_s - save_loop)))
                     self.lcdText1.setText("s")
                     self.scanner_widget.repaint()
@@ -1080,7 +1122,7 @@ class Ui(QtWidgets.QMainWindow):
         global shot, graph, scanner
         if shot == 0:
             shot = 1
-            self.SCShot_Button.setFont(QFont('Noto Sans', 8))
+            self.SCShot_Button.setFont(make_font('Noto Sans', 8))
             self.SCShot_Button.setStyleSheet("background-color: #5a5a5a; color: #80ff80;")
             self.SCShot_Button.setProperty("text", "Live SC-Shot\nOff")
             self.setFixedSize(1262, 304)        # breit mit SC
@@ -1098,7 +1140,7 @@ class Ui(QtWidgets.QMainWindow):
                 self.setFixedSize(1262, 304)
         elif shot == 1:
             shot = 0
-            self.SCShot_Button.setFont(QFont('Noto Sans', 8))
+            self.SCShot_Button.setFont(make_font('Noto Sans', 8))
             self.SCShot_Button.setStyleSheet("background-color: #5a5a5a; color: #ffffff;")
             self.SCShot_Button.setProperty("text", "Live SC-Shot\nOn")
             self.setFixedSize(766, 304)         # klein ohne SC
@@ -1170,7 +1212,7 @@ class Ui(QtWidgets.QMainWindow):
         global graph, scanner, shot
         if scanner == 0:
             scanner = 1
-            self.SC_Button.setFont(QFont('Noto Sans', 8))
+            self.SC_Button.setFont(make_font('Noto Sans', 8))
             self.SC_Button.setStyleSheet("background-color: #5a5a5a; color: #80ff80;")
             self.scanner_widget.setVisible(True)
             self.graph_frame.setVisible(False)
@@ -1197,7 +1239,7 @@ class Ui(QtWidgets.QMainWindow):
             scanner = 0
             self.scanner_widget.setVisible(False)
             self.graph_frame.setVisible(True)
-            self.SC_Button.setFont(QFont('Noto Sans', 8))
+            self.SC_Button.setFont(make_font('Noto Sans', 8))
             self.SC_Button.setStyleSheet("background-color: #5a5a5a; color: #ffffff;")
             if graph == 1 and shot == 1:
                 self.setFixedSize(1262, 776)
@@ -2145,48 +2187,48 @@ class Ui(QtWidgets.QMainWindow):
                 nk = 2
                 funktion = 'n'+funktion
         if "M" not in funktion and "k" not in funktion and "m" not in funktion and "u" not in funktion and "µ" not in funktion and "n" not in funktion and "p" not in funktion:
-            self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 60))
+            self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 60))
             wert_limit = ""
         elif "p" in funktion:
-            self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 60))
+            self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 60))
             wert = round(wert*1000000000000, 5)
             wert_limit = "p"
         elif "n" in funktion:
-            self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 60))
+            self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 60))
             wert = round(wert*1000000000, 5)
             wert_limit = "n"
         elif "u" in funktion:
-            self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 60))
+            self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 60))
             wert = round(wert*1000000, 5)
             wert_limit = "u"
         elif "µ" in funktion:
-            self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 60))
+            self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 60))
             wert = round(wert*1000000, 5)
             wert_limit = "u"
         elif "m" in funktion:
-            self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 60))
+            self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 60))
             wert = round(wert*1000, 5)
             wert_limit = "m"
         elif "k" in funktion:
-            self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 60))
+            self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 60))
             wert = round(wert/1000, 5)
             wert_limit = "k"
         elif "M" in funktion:
-            self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 60))
+            self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 60))
             wert = round(wert/1000000, 5)
             wert_limit = "M"
         fo_string = komma[nk].format(wert)
         if wert == 9.9E+31:
-            self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 36))
+            self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 36))
             fo_string = "Open/Range ?"
         if wert == 9.9E+34:
-            self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 36))
+            self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 36))
             fo_string = "Overload ?"
         if wert >= 9.9e+37:
-            self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 36))
+            self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 36))
             fo_string = "Open"
         if wert >= 9.8e+40:
-            self.lcdNumber.setFont(QFont('DejaVu Sans Mono', 36))
+            self.lcdNumber.setFont(make_font('DejaVu Sans Mono', 36))
             fo_string = "Overload ?"
         if ntc_switch == 1:
             self.limit_widget.setVisible(False)
