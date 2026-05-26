@@ -3,3 +3,4 @@ pyqtgraph
 numpy
 xlsxwriter
 python-vxi11
+standard-xdrlib; python_version >= "3.13"
