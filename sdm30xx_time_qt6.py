@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 import sys
 from sys import argv
-import socket
+import vxi11
 import time
 from time import sleep
 from datetime import datetime
@@ -112,94 +112,9 @@ except IndexError:
     TEMP_SET = "ROUT:"+TEMP_TYPE+"\nROUT:TEMP:UNIT "+TEMP_UNIT
 
 
-class SCPISocket:
-    """vxi11.Instrument-compatible wrapper around a raw SCPI TCP socket (port 5025).
-    More robust than VXI-11/RPC on Siglent SDMs: no portmap, no session limits."""
-    def __init__(self, host, port=5025):
-        self._host = host
-        self._port = int(port)
-        self._sock = socket.create_connection((self._host, self._port), timeout=10)
-        self._timeout_s = 10.0
-        self._sock.settimeout(self._timeout_s)
-        self._buf = b''
-
-    @property
-    def timeout(self):
-        return int(self._timeout_s * 1000)
-
-    @timeout.setter
-    def timeout(self, ms):
-        self._timeout_s = float(ms) / 1000.0
-        self._sock.settimeout(self._timeout_s)
-
-    def write(self, cmd, encoding='utf-8'):
-        if not cmd.endswith('\n'):
-            cmd = cmd + '\n'
-        self._sock.sendall(cmd.encode(encoding))
-
-    def _readline(self):
-        # Wait up to full timeout for the first chunk, then drain quickly.
-        # Siglent-specific commands (e.g. IDN-SGLT-PRI?) reply without \n,
-        # so we fall back to whatever we have once the socket idles.
-        saved = self._timeout_s
-        try:
-            while b'\n' not in self._buf:
-                try:
-                    chunk = self._sock.recv(4096)
-                except socket.timeout:
-                    break
-                if not chunk:
-                    break
-                self._buf += chunk
-                self._sock.settimeout(0.2)
-        finally:
-            self._sock.settimeout(saved)
-        if b'\n' in self._buf:
-            line, _, self._buf = self._buf.partition(b'\n')
-            return line
-        line, self._buf = self._buf, b''
-        return line
-
-    def ask(self, cmd, encoding='utf-8'):
-        self.write(cmd, encoding)
-        return self._readline().decode(encoding, errors='replace').rstrip('\r')
-
-    def read_raw(self):
-        """Read an IEEE 488.2 definite-length arbitrary block: #<n><LLL...><data>[\\n]."""
-        while not self._buf:
-            chunk = self._sock.recv(65536)
-            if not chunk:
-                return b''
-            self._buf += chunk
-        if self._buf[:1] != b'#':
-            data, self._buf = self._buf, b''
-            return data
-        while len(self._buf) < 2:
-            self._buf += self._sock.recv(65536)
-        n = int(self._buf[1:2])
-        while len(self._buf) < 2 + n:
-            self._buf += self._sock.recv(65536)
-        length = int(self._buf[2:2 + n])
-        header_len = 2 + n
-        total_needed = header_len + length
-        while len(self._buf) < total_needed:
-            self._buf += self._sock.recv(65536)
-        data = bytes(self._buf[header_len:total_needed])
-        self._buf = self._buf[total_needed:]
-        if self._buf[:1] == b'\n':
-            self._buf = self._buf[1:]
-        return data
-
-    def close(self):
-        try:
-            self._sock.close()
-        except Exception:
-            pass
-
-
 def init_dmm():
     global instr, leer, SC_card, out_text
-    instr = SCPISocket(HOST, PORT)
+    instr = vxi11.Instrument(HOST)
     instr.timeout = 60*1000
     # instr.write("*RST; *CLS", encoding='utf-8')
     instr.write("TRIGGER:SOURCE IMMEDIATE;TRIGGER:COUNT 1;SAMPLE:COUNT 1;TRIG:DEL:AUTO 1", encoding='utf-8')
@@ -2425,18 +2340,46 @@ class Ui(QtWidgets.QMainWindow):
 
 EXIT_CODE_REBOOT = -11231351
 
+_ende_done = False
+
 
 def ende():
-    global sa_flag
-    instr.write("ABORt\n*CLS\n*RST", encoding='utf-8')
-#    instr.write("*RST", encoding='utf-8')
-    instr.close()
+    # Idempotent cleanup: safe to call from aboutToQuit, atexit, and signal
+    # handlers. Without this the DMM stays in its last triggered state and
+    # the next launch hangs waiting on a busy instrument.
+    global sa_flag, _ende_done
+    if _ende_done:
+        return
+    _ende_done = True
+    try:
+        # ABORt + *CLS + SYSTem:LOCal — release the front panel from
+        # Remote lock. *RST is omitted because it briefly drops the SCPI
+        # raw socket on SDM3055 and breaks immediate restart.
+        instr.write("ABORt\n*CLS\nSYSTem:LOCal", encoding='utf-8')
+    except Exception:
+        pass
+    try:
+        instr.close()
+    except Exception:
+        pass
     if sa_flag == 1:
         sa_flag = 0
-        workbook.close()
+        try:
+            workbook.close()
+        except Exception:
+            pass
+
+
+def _signal_exit(signum, frame):
+    sys.exit(0)
 
 
 def main():
+    import atexit
+    import signal
+    atexit.register(ende)
+    signal.signal(signal.SIGTERM, _signal_exit)
+    signal.signal(signal.SIGINT, _signal_exit)
     exitCode = 0
     while True:
         try:
