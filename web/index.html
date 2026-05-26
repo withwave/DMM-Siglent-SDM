@@ -52,6 +52,25 @@
       </div>
       <button id="mm-reset">Reset min/max</button>
     </section>
+
+    <section id="chart-section">
+      <div class="chart-header">
+        <span class="chart-title">Real-time</span>
+        <span id="chart-window">2 min</span>
+        <div class="chart-controls">
+          <select id="chart-window-select">
+            <option value="30">30 s</option>
+            <option value="60">1 min</option>
+            <option value="120" selected>2 min</option>
+            <option value="300">5 min</option>
+            <option value="600">10 min</option>
+          </select>
+          <button id="chart-toggle" class="chart-btn active">Graph On</button>
+          <button id="chart-clear" class="chart-btn">Clear</button>
+        </div>
+      </div>
+      <canvas id="chart"></canvas>
+    </section>
   </main>
 
   <footer id="status">

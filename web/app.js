@@ -73,7 +73,187 @@ function render(reading) {
   $('mm-min').textContent = formatReading({ ...reading, value: reading.min }).value;
   $('mm-max').textContent = formatReading({ ...reading, value: reading.max }).value;
   $('mode-tag').textContent = reading.mode;
+  chart.push(reading);
 }
+
+// --- Chart: canvas-based realtime time-series ---
+
+const chart = (() => {
+  const canvas = $('chart');
+  const ctx = canvas.getContext('2d');
+  // Circular buffer: 600 ticks = 2.5 min at 250 ms (sized for the 10-min window).
+  const MAX_POINTS = 2400;
+  const times = new Float64Array(MAX_POINTS);
+  const values = new Float64Array(MAX_POINTS);
+  let head = 0, count = 0;
+  let windowSec = 120;
+  let enabled = true;
+  let lastMode = null;
+  // Repaint at most ~30 fps even if readings arrive faster.
+  let pendingFrame = false;
+
+  function push(reading) {
+    if (!enabled || !reading || reading.error || !isFinite(reading.value)) return;
+    if (reading.mode !== lastMode) {
+      // Mode change resets the trace so units stay consistent on screen.
+      head = 0; count = 0; lastMode = reading.mode;
+    }
+    times[head] = performance.now() / 1000;
+    values[head] = reading.value;
+    head = (head + 1) % MAX_POINTS;
+    if (count < MAX_POINTS) count++;
+    if (!pendingFrame) {
+      pendingFrame = true;
+      requestAnimationFrame(draw);
+    }
+  }
+
+  function clear() {
+    head = 0; count = 0;
+    draw();
+  }
+
+  function setWindow(sec) {
+    windowSec = sec;
+    $('chart-window').textContent =
+      sec < 60 ? `${sec} s` : `${Math.round(sec / 60)} min`;
+    draw();
+  }
+
+  function setEnabled(on) {
+    enabled = on;
+    const b = $('chart-toggle');
+    b.classList.toggle('active', on);
+    b.textContent = on ? 'Graph On' : 'Graph Off';
+    if (on) draw();
+  }
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    draw();
+  }
+
+  function draw() {
+    pendingFrame = false;
+    const rect = canvas.getBoundingClientRect();
+    const W = rect.width, H = rect.height;
+    ctx.clearRect(0, 0, W, H);
+
+    // Axes area
+    const padL = 64, padR = 12, padT = 10, padB = 22;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+
+    // Background gridlines
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(padL, padT, plotW, plotH);
+
+    if (count === 0) {
+      ctx.fillStyle = '#666';
+      ctx.font = '12px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('waiting for data...', W / 2, H / 2);
+      return;
+    }
+
+    const now = performance.now() / 1000;
+    const tMin = now - windowSec;
+
+    // Find min/max within window
+    let vMin = Infinity, vMax = -Infinity, visible = 0;
+    for (let i = 0; i < count; i++) {
+      const idx = (head - 1 - i + MAX_POINTS) % MAX_POINTS;
+      const t = times[idx];
+      if (t < tMin) break;
+      const v = values[idx];
+      if (v < vMin) vMin = v;
+      if (v > vMax) vMax = v;
+      visible++;
+    }
+    if (visible === 0) { vMin = values[(head - 1 + MAX_POINTS) % MAX_POINTS]; vMax = vMin; }
+    if (vMin === vMax) { vMin -= 1; vMax += 1; }
+    // 10 % padding so the line doesn't kiss the top/bottom
+    const span = vMax - vMin;
+    vMin -= span * 0.1;
+    vMax += span * 0.1;
+
+    // Y axis labels (5 ticks) — match the LCD's engineering prefix
+    const baseUnit = MODE_BASE_UNIT[lastMode] || '';
+    // Pick a single prefix for the whole axis based on the midpoint magnitude.
+    const ref = pickPrefix((vMin + vMax) / 2, baseUnit);
+    const scale = (vMin + vMax) === 0 ? 1 : ref.value / ((vMin + vMax) / 2);
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 1;
+    ctx.fillStyle = '#888';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + (plotH * i) / 4;
+      const v = vMax - ((vMax - vMin) * i) / 4;
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(padL + plotW, y);
+      ctx.stroke();
+      const label = (v * scale).toFixed(Math.abs(v * scale) >= 100 ? 1 : 3);
+      ctx.fillText(`${label} ${ref.prefix}${ref.unit}`, padL - 6, y);
+    }
+
+    // X axis labels (window start / mid / now)
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#888';
+    const xLabels = ['-' + (windowSec < 60 ? `${windowSec}s` : `${Math.round(windowSec/60)}m`),
+                     '-' + (windowSec < 60 ? `${Math.round(windowSec/2)}s` : `${Math.round(windowSec/120)}m`),
+                     'now'];
+    xLabels.forEach((lab, i) => {
+      ctx.fillText(lab, padL + (plotW * i) / 2, padT + plotH + 4);
+    });
+
+    // Line trace
+    ctx.strokeStyle = '#aaff00';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    let started = false;
+    for (let i = visible - 1; i >= 0; i--) {
+      const idx = (head - 1 - i + MAX_POINTS) % MAX_POINTS;
+      const t = times[idx];
+      const v = values[idx];
+      const x = padL + ((t - tMin) / windowSec) * plotW;
+      const y = padT + ((vMax - v) / (vMax - vMin)) * plotH;
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Last point dot
+    const lastIdx = (head - 1 + MAX_POINTS) % MAX_POINTS;
+    if (visible > 0) {
+      const x = padL + plotW;
+      const y = padT + ((vMax - values[lastIdx]) / (vMax - vMin)) * plotH;
+      ctx.fillStyle = '#aaff00';
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  window.addEventListener('resize', resize);
+  $('chart-window-select').addEventListener('change',
+    (e) => setWindow(parseInt(e.target.value, 10)));
+  $('chart-toggle').addEventListener('click', () => setEnabled(!enabled));
+  $('chart-clear').addEventListener('click', clear);
+
+  setTimeout(resize, 0);
+  // Repaint once per second too, so the "now" edge keeps moving even
+  // between ticks (e.g. while paused).
+  setInterval(() => { if (enabled) draw(); }, 1000);
+
+  return { push, clear, setEnabled, setWindow };
+})();
 
 function highlightMode(mode) {
   document.querySelectorAll('.mode-btn').forEach(b => {

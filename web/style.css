@@ -36,10 +36,11 @@ html, body {
 main {
   display: grid;
   grid-template-columns: 1fr 220px;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: auto auto auto;
   grid-template-areas:
     "lcd side"
-    "modes minmax";
+    "modes minmax"
+    "chart chart";
   gap: 10px;
   padding: 10px;
   max-width: 1100px;
@@ -213,6 +214,67 @@ main {
   font-size: 12px;
 }
 #mm-reset:hover { background: #7a7a7a; }
+
+/* === Chart === */
+#chart-section {
+  grid-area: chart;
+  background: #1a1a1a;
+  border-radius: 6px;
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chart-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: monospace;
+}
+
+.chart-title { color: var(--accent); font-weight: 700; }
+#chart-window { color: white; }
+.chart-controls { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+
+#chart-window-select {
+  background: rgba(0,0,0,0.4);
+  color: white;
+  border: 1px solid #555;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chart-btn {
+  background: var(--chassis);
+  color: white;
+  border: 1px solid #777;
+  border-radius: 3px;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chart-btn:hover { background: #6a6a6a; }
+.chart-btn.active {
+  background: var(--accent);
+  color: black;
+  font-weight: 700;
+  border-color: var(--accent);
+}
+
+#chart {
+  width: 100%;
+  height: 240px;
+  background: #0a0a0a;
+  border-radius: 4px;
+  display: block;
+}
 
 /* === Status bar === */
 #status {
