@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 import sys
 from sys import argv
-import vxi11
+import socket
 import time
 from time import sleep
 from datetime import datetime
@@ -111,9 +111,95 @@ except IndexError:
     print("multimeter.ini File: HOST=" + HOST + ", PORT=" + str(PORT) + "\n")
     TEMP_SET = "ROUT:"+TEMP_TYPE+"\nROUT:TEMP:UNIT "+TEMP_UNIT
 
+
+class SCPISocket:
+    """vxi11.Instrument-compatible wrapper around a raw SCPI TCP socket (port 5025).
+    More robust than VXI-11/RPC on Siglent SDMs: no portmap, no session limits."""
+    def __init__(self, host, port=5025):
+        self._host = host
+        self._port = int(port)
+        self._sock = socket.create_connection((self._host, self._port), timeout=10)
+        self._timeout_s = 10.0
+        self._sock.settimeout(self._timeout_s)
+        self._buf = b''
+
+    @property
+    def timeout(self):
+        return int(self._timeout_s * 1000)
+
+    @timeout.setter
+    def timeout(self, ms):
+        self._timeout_s = float(ms) / 1000.0
+        self._sock.settimeout(self._timeout_s)
+
+    def write(self, cmd, encoding='utf-8'):
+        if not cmd.endswith('\n'):
+            cmd = cmd + '\n'
+        self._sock.sendall(cmd.encode(encoding))
+
+    def _readline(self):
+        # Wait up to full timeout for the first chunk, then drain quickly.
+        # Siglent-specific commands (e.g. IDN-SGLT-PRI?) reply without \n,
+        # so we fall back to whatever we have once the socket idles.
+        saved = self._timeout_s
+        try:
+            while b'\n' not in self._buf:
+                try:
+                    chunk = self._sock.recv(4096)
+                except socket.timeout:
+                    break
+                if not chunk:
+                    break
+                self._buf += chunk
+                self._sock.settimeout(0.2)
+        finally:
+            self._sock.settimeout(saved)
+        if b'\n' in self._buf:
+            line, _, self._buf = self._buf.partition(b'\n')
+            return line
+        line, self._buf = self._buf, b''
+        return line
+
+    def ask(self, cmd, encoding='utf-8'):
+        self.write(cmd, encoding)
+        return self._readline().decode(encoding, errors='replace').rstrip('\r')
+
+    def read_raw(self):
+        """Read an IEEE 488.2 definite-length arbitrary block: #<n><LLL...><data>[\\n]."""
+        while not self._buf:
+            chunk = self._sock.recv(65536)
+            if not chunk:
+                return b''
+            self._buf += chunk
+        if self._buf[:1] != b'#':
+            data, self._buf = self._buf, b''
+            return data
+        while len(self._buf) < 2:
+            self._buf += self._sock.recv(65536)
+        n = int(self._buf[1:2])
+        while len(self._buf) < 2 + n:
+            self._buf += self._sock.recv(65536)
+        length = int(self._buf[2:2 + n])
+        header_len = 2 + n
+        total_needed = header_len + length
+        while len(self._buf) < total_needed:
+            self._buf += self._sock.recv(65536)
+        data = bytes(self._buf[header_len:total_needed])
+        self._buf = self._buf[total_needed:]
+        if self._buf[:1] == b'\n':
+            self._buf = self._buf[1:]
+        return data
+
+    def close(self):
+        try:
+            self._sock.close()
+        except Exception:
+            pass
+
+
 def init_dmm():
     global instr, leer, SC_card, out_text
-    instr = vxi11.Instrument(HOST)
+    instr = SCPISocket(HOST, PORT)
     instr.timeout = 60*1000
     # instr.write("*RST; *CLS", encoding='utf-8')
     instr.write("TRIGGER:SOURCE IMMEDIATE;TRIGGER:COUNT 1;SAMPLE:COUNT 1;TRIG:DEL:AUTO 1", encoding='utf-8')
@@ -425,7 +511,7 @@ class Ui(QtWidgets.QMainWindow):
         self.timer_single.timeout.connect(self.update)
 
 #        self.statusBar()
-        self.vdc()
+        self.adc()
         self.show()
 
     def clear(self):
