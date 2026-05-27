@@ -20,7 +20,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from scpi import SCPISocket
@@ -139,6 +140,10 @@ class DMMController:
         self.current_range = range_arg
         self.min_val = None
         self.max_val = None
+        # Invalidate last_reading so external HTTP clients can tell that
+        # the next sample really is post-switch (503 until the polling
+        # task fills it with a fresh value in the new mode).
+        self.last_reading = None
         print(f"[web] mode={mode} range={range_arg} -> {cmd}", file=sys.stderr)
 
     def reset_minmax(self):
@@ -209,6 +214,17 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Siglent SDM Web", lifespan=lifespan)
 
+# Open CORS so a UI loaded from one machine can talk to a backend on
+# another (e.g. open http://A:8000 in a browser, then point its "Server"
+# field at B:8000). This is a LAN tool, not a public service.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 STATIC_DIR = Path(__file__).parent / "web"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -242,6 +258,40 @@ async def info():
         "current_mode": dmm.current_mode,
         "current_range": dmm.current_range,
     }
+
+
+# Reads the latest reading the polling task already grabbed — no extra
+# SCPI traffic to the DMM. Lets `curl http://localhost:8000/api/reading`
+# (or tools/ma) get the live value while the web app is running.
+@app.get("/api/reading")
+async def reading_json():
+    if dmm.last_reading is None:
+        raise HTTPException(status_code=503, detail="no reading yet")
+    return dmm.last_reading
+
+
+# Human-friendly text response, e.g. "+0.0024 mA  DCI Auto" — perfect
+# for shell scripts (`watch -n 0.5 curl -s ...`).
+@app.get("/api/reading.txt", response_class=PlainTextResponse)
+async def reading_text():
+    r = dmm.last_reading
+    if r is None:
+        raise HTTPException(status_code=503, detail="no reading yet")
+    if r.get("error"):
+        return f"ERR  {r['error']}\n"
+    # Engineering prefix so DCI shows in mA/µA/nA the same way the UI does.
+    v = r["value"]
+    base = {"DCI": "A", "ACI": "A", "VDC": "V", "VAC": "V",
+            "RES": "Ohm", "FREQ": "Hz", "CAP": "F"}.get(r["mode"], "")
+    av = abs(v)
+    if av >= 1:        scale, prefix = 1, ""
+    elif av >= 1e-3:   scale, prefix = 1e3, "m"
+    elif av >= 1e-6:   scale, prefix = 1e6, "u"
+    elif av >= 1e-9:   scale, prefix = 1e9, "n"
+    elif av == 0:      scale, prefix = 1, ""
+    else:              scale, prefix = 1e12, "p"
+    range_tag = "Auto" if r["range"] == "AUTO" else f"Manual({r['range']})"
+    return f"{v*scale:+.4f} {prefix}{base}  {r['mode']} {range_tag}\n"
 
 
 @app.post("/api/mode/{mode}")

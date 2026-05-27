@@ -7,6 +7,10 @@
   --accent: #aaff00;
   --muted: #ffffff80;
   --danger: #ff5555;
+  /* UI scale toggle (1 / 0.5 / 0.25). Applied via `zoom` on <main>
+     so layout and click areas scale together; supported in Chromium,
+     WebKit, and Firefox (since 126). */
+  --ui-zoom: 1;
 }
 
 * { box-sizing: border-box; }
@@ -22,13 +26,39 @@ html, body {
 #titlebar {
   background: var(--chassis);
   color: white;
-  padding: 8px 14px;
+  padding: 6px 12px;
   display: flex;
-  justify-content: space-between;
+  gap: 8px;
   align-items: center;
-  font-size: 13px;
+  font-size: 12px;
   letter-spacing: 0.02em;
+  flex-wrap: wrap;
 }
+#titlebar #idn { flex: 0 1 auto; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.hdr-spacer { flex: 1; }
+.hdr-label { color: var(--muted); font-size: 11px; }
+#server-input {
+  background: rgba(0,0,0,0.4);
+  color: white;
+  border: 1px solid #777;
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-family: monospace;
+  font-size: 12px;
+  width: 14ch;
+}
+#server-set, #scale-btn {
+  background: #444;
+  color: white;
+  border: 1px solid #777;
+  border-radius: 3px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+#server-set:hover, #scale-btn:hover { background: #555; }
+#scale-btn { font-family: monospace; min-width: 38px; text-align: center; }
 
 #conn { color: #ff5555; transition: color 0.3s; }
 #conn.ok { color: #aaff00; }
@@ -58,6 +88,7 @@ main {
   padding: 10px;
   max-width: 1100px;
   margin: 0 auto;
+  zoom: var(--ui-zoom);
 }
 
 /* === Large green LCD === */

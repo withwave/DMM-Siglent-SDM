@@ -1,0 +1,38 @@
+#!/bin/sh
+# Print the DMM's current reading by asking the running web app.
+# No extra SCPI traffic, no DMM lock fight — the web backend's polling
+# task already has the value cached.
+#
+# Usage:
+#   ma                # one-shot
+#   ma -w             # watch (~2 Hz)
+#   ma -w 0.5         # watch every 0.5 s
+#   MA_HOST=10.0.0.4 ma   # point at a remote host
+#
+# Symlink or copy to a PATH dir for naked `ma` invocation:
+#   ln -s "$PWD/tools/ma" /usr/local/bin/ma
+set -eu
+
+HOST="${MA_HOST:-localhost}"
+PORT="${MA_PORT:-8000}"
+URL="http://${HOST}:${PORT}/api/reading.txt"
+
+once() {
+  # -m 2: 2 s timeout. -f: exit nonzero on HTTP error so we don't print HTML.
+  curl -sf -m 2 "$URL" 2>/dev/null || {
+    echo "(no response from $URL — is web_app running?)" >&2
+    return 1
+  }
+}
+
+if [ "${1:-}" = "-w" ] || [ "${1:-}" = "--watch" ]; then
+  interval="${2:-0.5}"
+  while :; do
+    out=$(once) || exit 1
+    # \r so the line updates in place instead of scrolling.
+    printf '\r\033[K%s' "$out"
+    sleep "$interval"
+  done
+else
+  once
+fi

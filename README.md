@@ -85,6 +85,52 @@ uvicorn web_app:app --host 0.0.0.0 --port 8000
 - `web/manifest.json`, `web/sw.js` — PWA manifest + Service Worker
 - `scpi.py` — SCPISocket transport (데스크톱/웹 공유)
 
+### HTTP API (외부 스크립트/명령행에서 측정값 읽기)
+
+웹앱이 떠 있는 동안 별도 SCPI 연결 없이 현재 측정값을 가져올 수 있습니다 (백엔드 폴링 태스크가 이미 250 ms 주기로 측정 중인 값을 그대로 노출 — DMM에 추가 부담 0).
+
+| Endpoint | 응답 | 용도 |
+|---|---|---|
+| `GET /api/info` | JSON: IDN, host/port, 모드 카탈로그, 현재 mode/range | UI 초기화, 진단 |
+| `GET /api/reading` | JSON: `{value, mode, range, prefix, min, max}` | 자동화 / 다른 스크립트 |
+| `GET /api/reading.txt` | 텍스트 한 줄: `-30.7087 nA  DCI Auto` | 사람 / shell |
+| `POST /api/mode/{mode}?range={arg}` | `{ok, mode, range}` | 모드 전환 (DCI/ACI/VDC/...) |
+| `POST /api/reset-minmax` | `{ok: true}` | min/max 초기화 |
+| `WS /ws` | 250 ms 주기 reading JSON push | 실시간 UI |
+
+빠른 호출 예시:
+```bash
+curl -s http://localhost:8000/api/reading.txt
+# -30.7087 nA  DCI Auto
+
+curl -sX POST http://localhost:8000/api/mode/DCI?range=0.2
+# {"ok":true,"mode":"DCI","range":"0.2"}
+```
+
+### `tools/ma` — 한 글자 명령으로 현재값 읽기
+
+```bash
+./tools/ma                  # 한 번
+./tools/ma -w               # 0.5 s 마다 in-place 갱신 (watch)
+./tools/ma -w 0.1           # 0.1 s 마다
+MA_HOST=10.0.0.4 ./tools/ma # 다른 호스트
+```
+
+PATH에 심볼릭 링크하면 그냥 `ma`로 호출:
+```bash
+ln -s "$PWD/tools/ma" /usr/local/bin/ma
+ma                          # +0.0024 mA  DCI Auto
+```
+
+웹앱이 실행 중이어야 하며 (SCPI 소켓 단일 client 제약), `tools/ma`는 SCPI에 직접 연결하지 않고 HTTP만 사용하므로 안전합니다.
+
+### 다른 LAN 서버로 연결 / 화면 크기 모드
+
+웹 UI 상단에 두 가지 컨트롤이 있습니다:
+
+- **Server 입력란** — 비워두면 페이지를 띄운 호스트에 연결. 다른 컴퓨터의 백엔드를 보고 싶으면 `192.168.0.50:8000` 같이 입력 후 `Set`. localStorage에 저장돼서 새로고침 후에도 유지. WebSocket과 모든 REST 호출이 그 호스트로 전환. (백엔드는 CORS를 열어둠.)
+- **`1×` 버튼** — 클릭할 때마다 화면 배율을 1× → ½× → ¼× → 1× 순으로 토글. 작은 화면이나 멀티 모니터에서 한쪽 구석에 띄우고 싶을 때 유용. `zoom` CSS 속성으로 모든 요소 + 클릭 영역이 비례 축소. localStorage에 저장.
+
 ### 데스크톱 앱처럼 실행하기 (PyQt 없이)
 
 브라우저는 그대로 두고, 같은 웹앱을 "앱처럼" 띄우는 방법 세 가지. **위로 갈수록 한 번에 실행하기 쉬움.**

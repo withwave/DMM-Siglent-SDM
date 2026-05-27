@@ -9,6 +9,45 @@ const log = (msg, isErr) => {
 
 let INFO = null;
 
+// --- Backend server selection (default: self) -----------------------------
+// Saved in localStorage so reloads remember the user's choice. Stored as
+// "host:port" or empty (= use this page's origin).
+
+function getServerHost() {
+  return localStorage.getItem('sdm.server') || location.host;
+}
+function setServerHost(host) {
+  if (host && host !== location.host) localStorage.setItem('sdm.server', host);
+  else localStorage.removeItem('sdm.server');
+}
+function apiUrl(path) {
+  return `${location.protocol}//${getServerHost()}${path}`;
+}
+function wsUrl(path) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${proto}://${getServerHost()}${path}`;
+}
+
+// --- UI scale toggle (1x / 0.5x / 0.25x) ----------------------------------
+
+const SCALE_STEPS = [1, 0.5, 0.25];
+function getScale() {
+  const stored = parseFloat(localStorage.getItem('sdm.scale'));
+  return SCALE_STEPS.includes(stored) ? stored : 1;
+}
+function applyScale(s) {
+  document.documentElement.style.setProperty('--ui-zoom', String(s));
+  // Label like "1×", "½×", "¼×".
+  const label = s === 1 ? '1×' : s === 0.5 ? '½×' : '¼×';
+  $('scale-btn').textContent = label;
+  localStorage.setItem('sdm.scale', String(s));
+}
+function cycleScale() {
+  const cur = getScale();
+  const next = SCALE_STEPS[(SCALE_STEPS.indexOf(cur) + 1) % SCALE_STEPS.length];
+  applyScale(next);
+}
+
 // --- formatting ---
 
 function pickPrefix(value, baseUnit) {
@@ -277,7 +316,7 @@ function populateRanges(mode) {
 // --- API calls ---
 
 async function fetchInfo() {
-  const r = await fetch('/api/info');
+  const r = await fetch(apiUrl('/api/info'));
   INFO = await r.json();
   $('idn').textContent = INFO.idn || `${INFO.host}:${INFO.port}`;
   highlightMode(INFO.current_mode);
@@ -288,7 +327,7 @@ async function fetchInfo() {
 async function setMode(mode, range = 'AUTO') {
   log(`switching to ${mode} ${range}...`);
   try {
-    const r = await fetch(`/api/mode/${mode}?range=${encodeURIComponent(range)}`,
+    const r = await fetch(apiUrl(`/api/mode/${mode}?range=${encodeURIComponent(range)}`),
                           { method: 'POST' });
     if (!r.ok) throw new Error(await r.text());
     const body = await r.json();
@@ -303,7 +342,7 @@ async function setMode(mode, range = 'AUTO') {
 }
 
 async function resetMinMax() {
-  await fetch('/api/reset-minmax', { method: 'POST' });
+  await fetch(apiUrl('/api/reset-minmax'), { method: 'POST' });
   $('mm-min').textContent = '--';
   $('mm-max').textContent = '--';
 }
@@ -314,12 +353,12 @@ let ws = null;
 let wsRetry = 1000;
 
 function openWS() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  if (ws) { try { ws.close(); } catch {} }
+  ws = new WebSocket(wsUrl('/ws'));
   ws.onopen = () => {
     wsRetry = 1000;
     $('conn').classList.add('ok');
-    log('connected');
+    log(`connected to ${getServerHost()}`);
   };
   ws.onmessage = (ev) => {
     try { render(JSON.parse(ev.data)); } catch (e) { /* ignore */ }
@@ -342,6 +381,23 @@ $('range-select').addEventListener('change', (e) => {
   if (INFO) setMode(INFO.current_mode, e.target.value);
 });
 $('mm-reset').addEventListener('click', resetMinMax);
+
+// Server input + scale toggle.
+applyScale(getScale());
+const serverInput = $('server-input');
+serverInput.value = localStorage.getItem('sdm.server') || '';
+function applyServerHost(host) {
+  setServerHost(host.trim());
+  // Reconnect against the new host. fetchInfo+openWS already use apiUrl/wsUrl.
+  fetchInfo().catch((e) => log(`info failed: ${e.message}`, true));
+  openWS();
+  log(`server -> ${getServerHost()}`);
+}
+$('server-set').addEventListener('click', () => applyServerHost(serverInput.value));
+serverInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') applyServerHost(serverInput.value);
+});
+$('scale-btn').addEventListener('click', cycleScale);
 
 // --- PWA install prompt ---
 // Chrome fires beforeinstallprompt when the page meets PWA criteria
