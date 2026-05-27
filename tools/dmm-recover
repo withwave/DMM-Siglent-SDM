@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Try to bring a stuck Siglent SDM back without a power cycle.
+
+What "stuck" looks like:
+  - ping responds, but `nc -zv <ip> 5025` says Connection refused
+  - or 5025 accepts TCP but never replies to *IDN?
+  - panel may say "Remote" and keys do nothing
+
+Recovery strategy this script uses, in order:
+
+  1. One quiet probe. If SCPI answers, send *CLS + SYSTem:LOCal and
+     we are done.
+  2. Wait silently. The instrument has an inactivity timeout (~30-90 s
+     depending on firmware); any TCP SYN we send during that window
+     resets the timeout, which is exactly why polling makes things
+     worse. Sit on our hands and re-probe at long intervals only.
+  3. After the wait window, if SCPI still does not answer, print
+     explicit recovery instructions (front-panel keys + power cycle).
+
+This script never holds an open socket - every probe is a single
+connect / one *IDN? / close, so we never accidentally extend the
+stale session ourselves.
+
+Usage:
+    python3 tools/dmm-recover           # default: read host from multimeter.ini
+    python3 tools/dmm-recover --host 192.168.0.177
+    python3 tools/dmm-recover --wait 180   # wait up to 3 minutes
+"""
+import argparse
+import configparser
+import socket
+import sys
+import time
+from pathlib import Path
+
+
+def probe(host: str, port: int, timeout: float = 3.0) -> str | None:
+    """One-shot connect + *IDN? + close. Returns the IDN string on
+    success, None on any failure."""
+    try:
+        s = socket.create_connection((host, port), timeout=timeout)
+        try:
+            s.settimeout(timeout)
+            s.sendall(b"*IDN?\n")
+            data = s.recv(256)
+            idn = data.decode(errors="replace").strip()
+            return idn if "Siglent" in idn else None
+        finally:
+            s.close()
+    except OSError:
+        return None
+
+
+def soft_reset(host: str, port: int) -> bool:
+    """Tell the DMM to release Remote Lock and clear any queued state.
+    Caller has already confirmed the SCPI port is alive."""
+    try:
+        s = socket.create_connection((host, port), timeout=3)
+        # SO_LINGER(0) - close sends RST so the DMM frees the session
+        # immediately, just like SCPISocket does in steady state.
+        import struct
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                     struct.pack("ii", 1, 0))
+        s.settimeout(2)
+        for cmd in (b"ABORt\n", b"*CLS\n", b"SYSTem:LOCal\n"):
+            s.sendall(cmd)
+        s.close()
+        return True
+    except OSError as e:
+        print(f"  soft-reset failed: {type(e).__name__}: {e}", file=sys.stderr)
+        return False
+
+
+def load_ini_default(key: str, fallback) -> str:
+    ini = Path(__file__).parent.parent / "multimeter.ini"
+    if not ini.exists():
+        return fallback
+    cfg = configparser.ConfigParser()
+    cfg.read(ini)
+    return cfg["hw_settings"].get(key, fallback)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", default=load_ini_default("HOST", "192.168.0.177"))
+    parser.add_argument("--port", type=int,
+                        default=int(load_ini_default("PORT", "5025")))
+    parser.add_argument("--wait", type=int, default=120,
+                        help="seconds to wait for the DMM to self-recover "
+                             "(default 120). Re-probes only every 30 s so "
+                             "the instrument's inactivity timer can run.")
+    args = parser.parse_args()
+
+    print(f"[recover] target: {args.host}:{args.port}")
+
+    # --- Step 1: one quiet probe ---------------------------------------
+    print("[recover] step 1: one probe ...")
+    idn = probe(args.host, args.port)
+    if idn:
+        print(f"  alive: {idn}")
+        if soft_reset(args.host, args.port):
+            print("  sent ABORt + *CLS + SYSTem:LOCal")
+        return 0
+    print("  no reply")
+
+    # --- Step 2: quiet wait --------------------------------------------
+    interval = 30  # long enough that we do not reset the DMM idle timer
+    elapsed = 0
+    print(f"[recover] step 2: quiet wait up to {args.wait}s "
+          f"(probing every {interval}s) ...")
+    while elapsed < args.wait:
+        time.sleep(interval)
+        elapsed += interval
+        idn = probe(args.host, args.port)
+        if idn:
+            print(f"  recovered at t={elapsed}s: {idn}")
+            if soft_reset(args.host, args.port):
+                print("  sent ABORt + *CLS + SYSTem:LOCal")
+            return 0
+        print(f"  t={elapsed}s: still no reply")
+
+    # --- Step 3: out of options ----------------------------------------
+    print()
+    print("[recover] gave up after quiet wait. Manual steps:")
+    print("  a) front panel: press Shift + Trigger (or Shift + Run/Hold)")
+    print("     to leave Remote mode.")
+    print("  b) front panel: Utility -> I/O -> LAN -> Apply / Reset LAN.")
+    print("  c) unplug the LAN cable for 30 s, then plug back in.")
+    print("  d) rear panel power switch: OFF for 10 s, then ON. Always works.")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

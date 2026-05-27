@@ -179,9 +179,20 @@ uvicorn web_app:app --host 0.0.0.0 --port 8000
 
 ### 만약 DMM이 응답하지 않으면 (Remote Lock / Stuck)
 
-빠른 connect/disconnect 반복은 SDM3055의 LAN 펌웨어를 stuck 시킬 수 있습니다:
-- **즉시 복구**: front panel `Shift` + `Trigger` (Local 전환)
-- **그래도 안 되면**: 후면 전원 OFF → 10초 → ON (cold boot)
+빠른 connect/disconnect 반복은 SDM3055의 LAN 펌웨어를 stuck 시킬 수 있습니다. 가벼운 것부터 차례로 시도:
+
+```bash
+./tools/dmm-recover           # 한 번 probe → 안 되면 quiet wait 2분 → 가이드 출력
+./tools/dmm-recover --wait 0  # probe만, 안 되면 즉시 가이드
+```
+
+이 도구가 중요한 이유: stuck 상태에서 `ping` 이나 `nc` 같은 명령으로 자꾸 TCP SYN을 던지면 DMM의 inactivity timer가 매번 리셋되어 **영영 자체 회복 못 함**. `dmm-recover`는 길게 30초 간격으로만 probe하며 그동안 instrument가 timeout으로 stale session을 풀 기회를 줍니다.
+
+매뉴얼 회복 순서:
+1. **Front panel**: `Shift` + `Trigger` (또는 `Shift` + `Run/Hold`) → Local 전환
+2. **Utility 메뉴**: `Utility` → `I/O` → `LAN` → `Apply` 또는 `Reset LAN`
+3. **LAN 케이블 분리** 30초 → 재연결
+4. **후면 전원 OFF** 10초 → ON (확실, 100%)
 
 ### 통합 테스트 (참고)
 
