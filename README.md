@@ -177,45 +177,11 @@ uvicorn web_app:app --host 0.0.0.0 --port 8000
 
 설치 후엔 도크/홈에 아이콘이 생기고 standalone 창으로 열림. 같은 LAN의 폰/태블릿에서도 `http://<이 컴퓨터 IP>:8000` 으로 동일하게 설치 가능 (단 Chrome 데스크톱은 비-HTTPS LAN URL은 설치 거부할 수 있음 — 그땐 방법 A 사용).
 
-### LAN의 다른 PC / 모바일에서 PWA로 설치하기
+### LAN의 다른 기기에서 설치
 
-**권장 구성**: 서버는 한 컴퓨터에만 띄우고 나머지 기기는 브라우저로만 접속. SDM3055의 SCPI는 단일 client 제약이 있어 서버를 두 곳에서 동시에 띄울 수 없지만, **백엔드 하나에 클라이언트(브라우저)는 여러 개** 붙어도 OK — WebSocket fan-out으로 모두 같은 측정값을 실시간 수신.
+서버 PC에서 `./run.sh --lan` (콘솔에 `LAN: http://<IP>:8000` 출력됨). 다른 PC/모바일 브라우저로 그 URL을 열고 **Install** 버튼(모바일은 "홈 화면에 추가").
 
-**1. 서버 PC에서 띄우기**
-
-```bash
-./run.sh --lan        # macOS는 run.command 더블클릭, Windows는 run.bat
-```
-방화벽이 TCP 8000을 막지 않게 허용:
-- macOS: 시스템 설정 → 네트워크 → 방화벽 → 옵션에서 Python/uvicorn 허용
-- Linux (ufw): `sudo ufw allow 8000/tcp`
-- Windows: 인바운드 규칙 → TCP 8000 허용
-
-**2. 서버 PC의 LAN IP 확인**
-
-| OS | 명령 |
-|---|---|
-| macOS | `ipconfig getifaddr en0` (Wi-Fi) / `en1` (이더넷) |
-| Linux | `hostname -I` |
-| Windows | `ipconfig` → IPv4 Address |
-
-**3. 다른 기기에서 접속 + 설치**
-
-브라우저로 `http://<서버 IP>:8000` 열고:
-
-| 기기 | 설치 방법 |
-|---|---|
-| 데스크톱 Chrome / Edge / Brave | 주소창 우측 ⊕ 아이콘 또는 페이지 우측 상단의 **Install** 버튼 |
-| iOS Safari | 공유 → "홈 화면에 추가" |
-| Android Chrome | 메뉴 ⋮ → "앱 설치" |
-
-설치 후 홈/도크 아이콘으로 standalone 윈도우 실행. 여러 기기에서 동시에 열어 봐도 됨.
-
-**주의 / 트러블슈팅**:
-- **데스크톱 Chrome이 비-HTTPS LAN URL의 PWA 설치를 거부**할 수 있음. 그땐 해당 PC에서 직접 `./run.sh` 로 서버를 띄우거나(이때는 기존 서버를 먼저 끄기 — SCPI 단일 client), Tailscale 등 VPN으로 신뢰 가능한 HTTPS 도메인 확보.
-- **새 버전이 안 보이면 새로고침 1회** — `web/sw.js`는 network-first라 자동으로 새 코드를 받지만, 이미 열려 있는 윈도우는 reload 필요.
-- **서버 PC 자체를 옮기고 싶다면**: 기존 PC에서 종료 (`fuser -k 8000/tcp` 또는 Ctrl-C) → 새 PC에서 `git clone https://github.com/withwave/DMM-Siglent-SDM && cd DMM-Siglent-SDM && ./run.sh --lan`. **두 PC에서 동시에 띄우지 말 것** (두 번째가 connect 실패 사이클로 들어감).
-- **DMM 전원을 껐다 켜도** 서버 PC의 웹앱은 자동 재연결하면서 마지막 모드를 복원함 (`e8e5bc6` 이후). 별도 조작 불필요.
+서버는 한 곳만 (SCPI 단일 client), 브라우저는 여럿 OK. 방화벽이 TCP 8000을 막으면 허용 필요.
 
 ### 만약 DMM이 응답하지 않으면 (Remote Lock / Stuck)
 

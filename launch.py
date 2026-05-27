@@ -37,6 +37,20 @@ def wait_for_port(host, port, timeout=20):
     return False
 
 
+def lan_ip():
+    """Best-effort: which local IP would route to the outside world.
+    UDP socket trick — no packet is actually sent, the kernel just
+    picks the source IP it would use. Returns None if offline."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
 def find_chromium_browser():
     """Return path to a Chromium-based browser that supports --app."""
     system = platform.system()
@@ -125,6 +139,10 @@ def main():
         if not args.no_browser:
             open_app_window(url)
         print(f"[launch] {url} - Ctrl-C to stop server")
+        if args.lan:
+            ip = lan_ip()
+            if ip:
+                print(f"[launch] LAN: http://{ip}:{args.port}")
         uvi.wait()
     except KeyboardInterrupt:
         print("\n[launch] Ctrl-C, stopping uvicorn...")
