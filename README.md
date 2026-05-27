@@ -177,6 +177,12 @@ uvicorn web_app:app --host 0.0.0.0 --port 8000
 
 설치 후엔 도크/홈에 아이콘이 생기고 standalone 창으로 열림. 같은 LAN의 폰/태블릿에서도 `http://<이 컴퓨터 IP>:8000` 으로 동일하게 설치 가능 (단 Chrome 데스크톱은 비-HTTPS LAN URL은 설치 거부할 수 있음 — 그땐 방법 A 사용).
 
+### LAN의 다른 기기에서 설치
+
+서버 PC에서 `./run.sh --lan` (콘솔에 `LAN: http://<IP>:8000` 출력됨). 다른 PC/모바일 브라우저로 그 URL을 열고 **Install** 버튼(모바일은 "홈 화면에 추가").
+
+서버는 한 곳만 (SCPI 단일 client), 브라우저는 여럿 OK. 방화벽이 TCP 8000을 막으면 허용 필요.
+
 ### 만약 DMM이 응답하지 않으면 (Remote Lock / Stuck)
 
 빠른 connect/disconnect 반복은 SDM3055의 LAN 펌웨어를 stuck 시킬 수 있습니다. 가벼운 것부터 차례로 시도:
