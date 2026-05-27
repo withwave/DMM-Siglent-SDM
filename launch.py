@@ -138,11 +138,11 @@ def main():
         time.sleep(0.5)
         if not args.no_browser:
             open_app_window(url)
-        print(f"[launch] {url} - Ctrl-C to stop server")
+        print(f"[launch] {url} - Ctrl-C to stop server", flush=True)
         if args.lan:
             ip = lan_ip()
             if ip:
-                print(f"[launch] LAN: http://{ip}:{args.port}")
+                print(f"[launch] LAN: http://{ip}:{args.port}", flush=True)
         uvi.wait()
     except KeyboardInterrupt:
         print("\n[launch] Ctrl-C, stopping uvicorn...")
