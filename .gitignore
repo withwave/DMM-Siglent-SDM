@@ -16,3 +16,6 @@ env/
 
 # macOS .app bundle built by tools/build-macos-app.sh
 *.app/
+
+# Last selected mode/range, written by web_app.py on set_mode.
+.last_mode

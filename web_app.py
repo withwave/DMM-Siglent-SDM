@@ -100,6 +100,11 @@ class DMMController:
     # a full power-cycle boot (~30-60 s).
     RECONNECT_BACKOFF_S = 2.0
 
+    # Persist the last user-selected mode/range so a server restart
+    # picks up where we left off (a freshly-restarted server otherwise
+    # falls back to DCI/AUTO defaults).
+    STATE_FILE = Path(__file__).resolve().parent / ".last_mode"
+
     def __init__(self, host, port):
         self.host = host
         self.port = port
@@ -114,6 +119,27 @@ class DMMController:
         self.subscribers: set[asyncio.Queue] = set()
         self._poll_task: asyncio.Task | None = None
         self._connected = False
+        self._load_state()
+
+    def _load_state(self):
+        try:
+            mode, _, range_arg = self.STATE_FILE.read_text(
+                encoding="utf-8").strip().partition(",")
+            if mode in MODES and range_arg:
+                valid = [r[1] for r in MODES[mode][2]]
+                if range_arg in valid:
+                    self.current_mode = mode
+                    self.current_range = range_arg
+        except (OSError, ValueError):
+            pass
+
+    def _save_state(self):
+        try:
+            self.STATE_FILE.write_text(
+                f"{self.current_mode},{self.current_range}",
+                encoding="utf-8")
+        except OSError:
+            pass
 
     def connect(self) -> bool:
         """Open the SCPI socket and replay last-known mode/range.
@@ -200,6 +226,8 @@ class DMMController:
         # the next sample really is post-switch (503 until the polling
         # task fills it with a fresh value in the new mode).
         self.last_reading = None
+        # Persist for next server start.
+        self._save_state()
 
     def reset_minmax(self):
         self.min_val = None
