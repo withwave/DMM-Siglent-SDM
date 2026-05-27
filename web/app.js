@@ -103,17 +103,54 @@ function rangeLabel(mode, range) {
 
 // --- DOM updates ---
 
+// Tracks freshness so the status bar can show "0.3s ago" / "stale 5s".
+// Client wall clock (Date.now), not the server ts — avoids drift if
+// the two clocks disagree.
+let lastMsgClientMs = null;
+let lastReadingHadError = false;
+
 function render(reading) {
   const f = formatReading(reading);
   $('value').textContent = f.value;
   $('unit').textContent = f.unit;
   $('range-tag').textContent = f.range;
+  lastReadingHadError = !!(reading && reading.error);
   if (!reading || reading.error) return;
   $('mm-min').textContent = formatReading({ ...reading, value: reading.min }).value;
   $('mm-max').textContent = formatReading({ ...reading, value: reading.max }).value;
   $('mode-tag').textContent = reading.mode;
   chart.push(reading);
 }
+
+function fmtAge(secs) {
+  if (secs < 1)   return `${Math.round(secs * 1000)} ms ago`;
+  if (secs < 60)  return `${secs.toFixed(1)} s ago`;
+  if (secs < 3600) return `${Math.round(secs / 60)} min ago`;
+  return `${Math.round(secs / 3600)} h ago`;
+}
+
+function updateFreshness() {
+  const fr = $('freshness');
+  const dot = $('conn');
+  if (lastMsgClientMs === null) {
+    fr.textContent = '';
+    fr.classList.remove('stale');
+    return;
+  }
+  const age = (Date.now() - lastMsgClientMs) / 1000;
+  // > 1 s without a frame = stale (250 ms cadence + 750 ms slack).
+  // Also stale if the latest frame was an error.
+  const stale = age > 1.0 || lastReadingHadError;
+  fr.textContent = lastReadingHadError
+    ? `disconnected · last ${fmtAge(age)}`
+    : `last ${fmtAge(age)}`;
+  fr.classList.toggle('stale', stale);
+  // The header dot reflects end-to-end health (WS open AND last frame
+  // was real data), not just the WebSocket. Without this it stays green
+  // even when the DMM is unreachable.
+  if (dot) dot.classList.toggle('ok', !stale && ws && ws.readyState === 1);
+}
+setInterval(updateFreshness, 500);
 
 // --- Chart: canvas-based realtime time-series ---
 
@@ -359,9 +396,17 @@ function openWS() {
     wsRetry = 1000;
     $('conn').classList.add('ok');
     log(`connected to ${getServerHost()}`);
+    // Refresh /api/info on every (re)connect so the header IDN reflects
+    // a DMM that just came back from a power cycle.
+    fetchInfo().catch(() => { /* leave previous values */ });
   };
   ws.onmessage = (ev) => {
-    try { render(JSON.parse(ev.data)); } catch (e) { /* ignore */ }
+    try {
+      const reading = JSON.parse(ev.data);
+      lastMsgClientMs = Date.now();
+      render(reading);
+      updateFreshness();
+    } catch (e) { /* ignore */ }
   };
   ws.onclose = () => {
     $('conn').classList.remove('ok');

@@ -16,6 +16,7 @@ import asyncio
 import configparser
 import json
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -82,7 +83,23 @@ class DMMController:
     All SCPI calls go through SCPISocket which already locks, drains, and
     reconnects on error - so a /mode HTTP request hitting at the same
     instant as a poll just serializes through the lock.
+
+    Reconnect model:
+      - connect() never raises. On failure it leaves instr=None and
+        returns False; the poll loop retries every RECONNECT_BACKOFF_S.
+      - On every successful (re)connect the last selected mode/range is
+        replayed so a fresh-booted DMM doesn't sit in its factory
+        default (usually VDC).
+      - poll_once flips _connected to False on any SCPI error, which
+        kicks the loop into the reconnect branch on the next tick.
     """
+
+    # How long to wait between reconnect attempts when the DMM is down.
+    # 2 s is short enough that a quick recovery (LAN blip) looks instant
+    # to the UI, and long enough that we don't flood the network during
+    # a full power-cycle boot (~30-60 s).
+    RECONNECT_BACKOFF_S = 2.0
+
     def __init__(self, host, port):
         self.host = host
         self.port = port
@@ -93,39 +110,63 @@ class DMMController:
         self.last_reading: dict | None = None
         self.min_val: float | None = None
         self.max_val: float | None = None
+        self.last_connect_ts: float | None = None
         self.subscribers: set[asyncio.Queue] = set()
         self._poll_task: asyncio.Task | None = None
         self._connected = False
 
-    def connect(self):
-        self.instr = SCPISocket(self.host, self.port)
-        self.instr.timeout = 10
+    def connect(self) -> bool:
+        """Open the SCPI socket and replay last-known mode/range.
+        Never raises — returns True on success, False on any failure.
+        Safe to call repeatedly (poll loop drives the retry cadence)."""
+        self._close_quietly()
         try:
-            self.instr.write("TRIGGER:SOURCE IMMEDIATE;TRIGGER:COUNT 1;"
-                             "SAMPLE:COUNT 1;TRIG:DEL:AUTO 1")
-            self.idn = self.instr.ask("*IDN?")
-            print(f"[web] IDN: {self.idn}", file=sys.stderr)
-            self.set_mode("DCI", "AUTO")
-        finally:
-            self.instr.timeout = 2
-        self._connected = True
+            # connect_retries=1 so SCPISocket.__init__ doesn't block our
+            # poll loop for 18 s; we run our own retry from poll_loop.
+            instr = SCPISocket(self.host, self.port,
+                               connect_retries=1, retry_delay=0)
+            instr.timeout = 10
+            instr.write("TRIGGER:SOURCE IMMEDIATE;TRIGGER:COUNT 1;"
+                        "SAMPLE:COUNT 1;TRIG:DEL:AUTO 1")
+            self.idn = instr.ask("*IDN?")
+            self.instr = instr
+            # Replay current mode so a freshly booted DMM (factory default
+            # is usually VDC) ends up in whatever the user last selected.
+            self._apply_mode(self.current_mode, self.current_range)
+            instr.timeout = 2
+            self._connected = True
+            self.last_connect_ts = time.time()
+            print(f"[web] connected: {self.idn} "
+                  f"(restored {self.current_mode} {self.current_range})",
+                  file=sys.stderr)
+            return True
+        except Exception as e:
+            print(f"[web] connect failed: {type(e).__name__}: {e}",
+                  file=sys.stderr)
+            self._close_quietly()
+            self._connected = False
+            return False
 
-    def close(self):
-        if self.instr:
-            try:
-                self.instr.write("ABORt\n*CLS\nSYSTem:LOCal")
-            except Exception:
-                pass
+    def _close_quietly(self):
+        if self.instr is not None:
             try:
                 self.instr.close()
             except Exception:
                 pass
             self.instr = None
-            self._connected = False
 
-    def set_mode(self, mode: str, range_arg: str = "AUTO"):
-        if mode not in MODES:
-            raise ValueError(f"unknown mode: {mode}")
+    def close(self):
+        if self.instr is not None:
+            try:
+                self.instr.write("ABORt\n*CLS\nSYSTem:LOCal")
+            except Exception:
+                pass
+        self._close_quietly()
+        self._connected = False
+
+    def _apply_mode(self, mode: str, range_arg: str):
+        """Send CONF: command for mode+range. Caller must hold instr.
+        Does not reset min/max — used by both set_mode() and connect()."""
         _, scpi_conf, ranges = MODES[mode]
         valid_ranges = [r[1] for r in ranges]
         if range_arg not in valid_ranges:
@@ -138,25 +179,44 @@ class DMMController:
             pass
         self.current_mode = mode
         self.current_range = range_arg
+        print(f"[web] mode={mode} range={range_arg} -> {cmd}", file=sys.stderr)
+
+    def set_mode(self, mode: str, range_arg: str = "AUTO"):
+        """User-initiated mode change. Resets min/max and invalidates
+        last_reading so callers can distinguish pre/post-switch."""
+        if mode not in MODES:
+            raise ValueError(f"unknown mode: {mode}")
+        if self.instr is None or not self._connected:
+            raise RuntimeError("DMM not connected")
+        try:
+            self._apply_mode(mode, range_arg)
+        except Exception:
+            # Mark broken so the poll loop reconnects and replays.
+            self._connected = False
+            raise
         self.min_val = None
         self.max_val = None
         # Invalidate last_reading so external HTTP clients can tell that
         # the next sample really is post-switch (503 until the polling
         # task fills it with a fresh value in the new mode).
         self.last_reading = None
-        print(f"[web] mode={mode} range={range_arg} -> {cmd}", file=sys.stderr)
 
     def reset_minmax(self):
         self.min_val = None
         self.max_val = None
 
-    def poll_once(self) -> dict | None:
+    def poll_once(self) -> dict:
         """One READ? + format. Called by the asyncio loop in a thread to
-        avoid blocking the event loop on socket I/O."""
+        avoid blocking the event loop on socket I/O. On SCPI error,
+        flips _connected=False so the loop runs a fresh reconnect next
+        tick (which also replays the last mode)."""
+        if self.instr is None or not self._connected:
+            return {"error": f"disconnected from {self.host}:{self.port}"}
         try:
             raw = self.instr.ask("READ?")
             v = float(raw)
         except Exception as e:
+            self._connected = False
             return {"error": f"{type(e).__name__}: {e}"}
         if self.min_val is None or v < self.min_val:
             self.min_val = v
@@ -171,20 +231,44 @@ class DMMController:
             "max": self.max_val,
         }
 
+    def _broadcast(self, reading: dict):
+        """Fan out one reading to all WebSocket subscribers. Drops the
+        queue (not the socket) if a subscriber is too slow."""
+        dead = []
+        for q in list(self.subscribers):
+            try:
+                q.put_nowait(reading)
+            except asyncio.QueueFull:
+                dead.append(q)
+        for q in dead:
+            self.subscribers.discard(q)
+
     async def poll_loop(self):
+        """Main loop. Owns reconnect cadence: if _connected is False,
+        try to reconnect (blocking call in executor), broadcast an error
+        frame on failure and back off, otherwise poll at 4 Hz."""
         loop = asyncio.get_running_loop()
         while True:
+            if not self._connected:
+                ok = await loop.run_in_executor(None, self.connect)
+                if not ok:
+                    err = {
+                        "error": f"disconnected from {self.host}:{self.port}",
+                        "ts": time.time(),
+                    }
+                    self.last_reading = err
+                    self._broadcast(err)
+                    await asyncio.sleep(self.RECONNECT_BACKOFF_S)
+                    continue
+                # Fresh connect: skip straight to the read below so the UI
+                # sees a live value as fast as possible.
             reading = await loop.run_in_executor(None, self.poll_once)
+            reading["ts"] = time.time()
             self.last_reading = reading
-            # Fan out to all WebSocket subscribers without blocking each other.
-            dead = []
-            for q in list(self.subscribers):
-                try:
-                    q.put_nowait(reading)
-                except asyncio.QueueFull:
-                    dead.append(q)
-            for q in dead:
-                self.subscribers.discard(q)
+            self._broadcast(reading)
+            # On error the next iteration falls into the reconnect branch
+            # above; no extra sleep needed beyond the normal 250 ms tick
+            # because RECONNECT_BACKOFF_S already gates that path.
             await asyncio.sleep(0.25)
 
 
@@ -196,13 +280,16 @@ dmm = DMMController(cfg["host"], cfg["port"])
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    try:
-        dmm.connect()
-    except Exception as e:
-        print(f"[web] DMM connect failed: {type(e).__name__}: {e}",
-              file=sys.stderr)
-        # Start anyway so the UI can show a clear error; poll_once will
-        # raise and stream the message until reconnect succeeds.
+    # First connect attempt. Failure is fine — poll_loop will keep
+    # retrying every RECONNECT_BACKOFF_S until the DMM comes back.
+    if not dmm.connect():
+        # Seed last_reading so HTTP clients see a clear error frame
+        # immediately, instead of 503 "no reading yet" until the first
+        # poll cycle completes.
+        dmm.last_reading = {
+            "error": f"disconnected from {dmm.host}:{dmm.port}",
+            "ts": time.time(),
+        }
     dmm._poll_task = asyncio.create_task(dmm.poll_loop())
     try:
         yield
@@ -253,6 +340,8 @@ async def info():
         "idn": dmm.idn,
         "host": dmm.host,
         "port": dmm.port,
+        "connected": dmm._connected,
+        "last_connect_ts": dmm.last_connect_ts,
         "modes": {k: {"label": v[0], "ranges": [list(r) for r in v[2]]}
                   for k, v in MODES.items()},
         "current_mode": dmm.current_mode,
@@ -300,6 +389,10 @@ async def set_mode(mode: str, range: str = "AUTO"):
         raise HTTPException(status_code=400, detail=f"unknown mode: {mode}")
     try:
         dmm.set_mode(mode, range)
+    except RuntimeError as e:
+        # "DMM not connected" — surface as 503 so the UI can show a
+        # clear "retry when reconnected" hint instead of a generic 500.
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500,
                             detail=f"{type(e).__name__}: {e}")

@@ -103,8 +103,10 @@ case "$txt" in
   *)     fail "/api/reading.txt unexpected: ${txt}" ;;
 esac
 
-# tools/ma: should exit 0 and print the same shape
-out=$("./tools/ma" 2>&1)
+# tools/ma: should exit 0 and print the same shape.
+# Point it at our test port; the default (localhost:8000) would hit a
+# different (or absent) instance.
+out=$(MA_HOST=127.0.0.1 MA_PORT="$PORT" "./tools/ma" 2>&1)
 echo "$out" | grep -qE "DCI"  && ok "tools/ma: $out" || fail "tools/ma bad output: $out"
 
 # Mode switch round-trip: DCI -> VDC -> DCI

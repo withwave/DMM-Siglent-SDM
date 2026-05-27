@@ -331,7 +331,13 @@ main {
   padding: 4px 14px;
   font-size: 12px;
   font-family: monospace;
+  display: flex;
+  gap: 14px;
+  align-items: center;
 }
+#status-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#freshness { color: var(--muted); white-space: nowrap; }
+#freshness.stale { color: var(--danger); }
 #status.err { color: var(--danger); }
 
 /* === Mobile fallback === */
