@@ -87,16 +87,33 @@ uvicorn web_app:app --host 0.0.0.0 --port 8000
 
 ### 데스크톱 앱처럼 실행하기 (PyQt 없이)
 
-브라우저는 그대로 두고, 같은 웹앱을 "앱처럼" 띄우는 방법 두 가지:
+브라우저는 그대로 두고, 같은 웹앱을 "앱처럼" 띄우는 방법 세 가지. **위로 갈수록 한 번에 실행하기 쉬움.**
 
-**방법 A — `launch.py`로 chromeless 윈도우 (가장 간단)**
+**방법 0 — macOS `.app` 번들 (가장 매끄러움, Spotlight/Dock 검색 가능)**
 ```bash
-cd ~/AI/DMM-Siglent-SDM
+./tools/build-macos-app.sh                  # 프로젝트 폴더에 .app 생성
+./tools/build-macos-app.sh /Applications    # 곧장 Applications로
+```
+빌드된 `Siglent SDM Web.app`을 **Finder에서 더블클릭** 또는 Spotlight로 검색. dock 아이콘도 정상 표시됨. 앱이 프로젝트 폴더의 `run.sh`를 호출하므로 `git pull` 만으로 업데이트 반영.
+
+**방법 1 — 더블클릭 실행 스크립트 (`.app` 빌드 없이)**
+
+| OS | 파일 | 실행 |
+|---|---|---|
+| macOS | `run.command` | Finder에서 더블클릭 → Terminal 자동 실행 |
+| Linux | `run.sh` | `./run.sh` 또는 파일관리자에서 실행 |
+| Windows | `run.bat` | 더블클릭 |
+
+처음 실행 시 `.venv` 자동 생성 + `requirements.txt` 자동 설치 후 launch. 두 번째 실행부터는 즉시 시작.
+
+**방법 A — `launch.py` 직접 (개발자용)**
+```bash
 source .venv/bin/activate
 python3 launch.py            # 로컬에서만
-python3 launch.py --lan      # 다른 기기도 접근 가능하게
+python3 launch.py --lan      # 다른 기기도 접근 가능
+python3 launch.py --no-browser  # 서버만 (모바일에서 접속)
 ```
-- uvicorn을 자동 시작하고 Chrome/Edge/Brave를 `--app` 모드로 띄움 — 탭/주소창 없는 standalone 윈도우
+- uvicorn을 자동 시작하고 Chrome/Edge/Brave/Arc를 `--app` 모드로 띄움 — 탭/주소창 없는 standalone 윈도우
 - Ctrl-C로 종료 시 DMM Remote Lock 해제 후 정리
 
 **방법 B — PWA 설치 (브라우저에서 "앱으로 설치")**

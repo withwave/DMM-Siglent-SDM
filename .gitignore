@@ -13,3 +13,6 @@ env/
 
 # Chromium --app user-data dir created by launch.py
 .browser-profile/
+
+# macOS .app bundle built by tools/build-macos-app.sh
+*.app/
