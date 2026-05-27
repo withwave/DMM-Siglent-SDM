@@ -1,7 +1,12 @@
-# 작업 인계 — 2026-05-27 05:43 UTC
+# 작업 인계 — 2026-05-27 07:05 UTC
 
 ## 현재 작업
-원본 Linux/PyQt6 데스크톱 앱(`martin-bochum/DMM-Siglent-SDM`)을 macOS 호환으로 포팅하고, 같은 SCPI 코어 위에 **FastAPI + WebSocket 웹앱**을 얹어 LAN 어디서나 브라우저로 접근. 이번 세션에서 **자동 재연결 + 모드 복원 + freshness UI** 보강 (`e8e5bc6`). 모든 변경은 `withwave/DMM-Siglent-SDM` `main` 브랜치에 푸시 완료, 워킹 트리 clean.
+원본 Linux/PyQt6 데스크톱 앱(`martin-bochum/DMM-Siglent-SDM`)을 macOS 호환으로 포팅하고, 같은 SCPI 코어 위에 **FastAPI + WebSocket 웹앱**을 얹어 LAN 어디서나 브라우저로 접근. 이번 세션 보강:
+1. **자동 재연결 + 모드 복원 + freshness UI** (`e8e5bc6`) — DMM OFF→ON 시 마지막 모드로 자동 복귀, status bar에 freshness 표시.
+2. **`.last_mode` 디스크 영속화** (`a1d272d`) — 서버 재시작에도 마지막 모드 유지.
+3. **`launch.py --lan` 콘솔에 LAN URL 자동 출력** (`ac20485`, `3e9340b`) — 다른 PC에서 접속할 URL을 별도 명령 없이 그냥 보여줌.
+
+모든 변경은 `withwave/DMM-Siglent-SDM` `main` 브랜치에 푸시 완료, 워킹 트리 clean.
 
 ## 최근 결정 (이유 포함)
 
@@ -10,19 +15,30 @@
 - **헤더 conn-dot은 e2e health.** 이전엔 WebSocket open만 보여서 DMM이 죽어도 녹색이라 사용자가 혼란. 이제 `WS open && lastReadingHadError==false && age<1s` 일 때만 녹색.
 - **RECONNECT_BACKOFF_S = 2 s.** 1 s 미만은 부팅 중 DMM에 SYN 폭격 → inactivity timer 리셋되어 DMM 자체 회복 방해 (`dmm-recover` 와 같은 이유). 5 s 이상은 LAN blip 회복이 너무 느려 보임.
 - **SCPISocket을 `connect_retries=1, retry_delay=0` 으로 재초기화.** 기본값 6 × 3 s = 18 s는 우리 poll loop을 그만큼 block함. 외부에서 우리가 직접 retry 사이클을 돌리므로 SCPISocket 내부 retry는 꺼야 함.
+- **마지막 mode/range 는 `.last_mode` 파일에 저장.** 메모리만 두면 서버 재시작 시 DCI/AUTO로 리셋. `set_mode()` 성공 시 plain text `MODE,RANGE` 로 save, `__init__` 에서 load + 카탈로그 validation 후 default override. 손상/unknown 모드면 silently DCI/AUTO 폴백. `.gitignore` 됨 (사용자별 상태).
+- **`launch.py --lan` 이 직접 LAN IP를 출력**한다 — `lan_ip()` 가 UDP socket 트릭(8.8.8.8 connect 후 getsockname)으로 외부 라우팅 IP 가져옴. 사용자가 OS별로 `ipconfig`/`hostname -I`를 외울 필요 없음. `print(..., flush=True)` 로 파일 redirect에서도 즉시 보이게.
 - **이전 turn의 핵심 결정 유지**:
   - `vxi11` → `scpi.SCPISocket`(raw TCP 5025). VXI-11 1-client 한정 + ungraceful 종료 시 분 단위 stuck. `b57f0fe` 의 timeout 단위 버그(60*1000 = 16 h)가 진짜 hang 원인이었음.
   - SCPISocket 안전 가드 풀세트: `RLock` + `_drain()` 선처리 + 실패/공백/binary 응답 시 `_reconnect()` + `SO_LINGER(0)`. `read_raw()`는 finally에서 무조건 reconnect (SCDP screenshot 잔재 차단).
   - 데스크톱 + 웹 한 repo 유지. Tauri/Electron 안 가고 PWA + `launch.py` 로 데스크톱 경험.
   - DMM 깊은 hang 회복은 quiet wait가 핵심 (polling이 inactivity timer 리셋). `tools/dmm-recover`가 30 초 간격으로만 probe.
 
-## 변경 파일 (이번 세션 — `e8e5bc6`)
+## 변경 파일 (이번 세션)
 
-- `web_app.py` — `DMMController.connect()` non-raise + replay mode, `_close_quietly()`, `_apply_mode()` 추출, `poll_loop` 가 reconnect cadence 소유, `_broadcast()` 추출, payload `ts` 추가, `/api/info`에 `connected`+`last_connect_ts`, `/api/mode` 503 매핑.
+`e8e5bc6` (auto-reconnect + freshness):
+- `web_app.py` — `DMMController.connect()` non-raise + replay mode, `_close_quietly()`, `_apply_mode()` 추출, `poll_loop` 가 reconnect cadence 소유, `_broadcast()` 추출, payload `ts`, `/api/info` `connected`+`last_connect_ts`, `/api/mode` 503 매핑.
 - `web/index.html` — `<span id="freshness">` 추가.
 - `web/style.css` — status bar flex 정렬, `#freshness` / `.stale` 색상.
 - `web/app.js` — `lastMsgClientMs` + `updateFreshness()` + `setInterval(500ms)`, ws.onopen 시 `fetchInfo()` 재호출, conn-dot e2e health 반영.
-- `tests/test_endpoints.sh` — `tools/ma` 호출에 `MA_HOST=127.0.0.1 MA_PORT="$PORT"` 전달 (이전엔 ma가 default localhost:8000을 찾아 항상 실패).
+- `tests/test_endpoints.sh` — `tools/ma` 호출에 `MA_HOST=127.0.0.1 MA_PORT="$PORT"` 전달.
+
+`ac20485` / `3e9340b` (launch + README):
+- `launch.py` — `lan_ip()` 추가, `--lan` 시 `[launch] LAN: http://<ip>:8000` 출력, `flush=True`.
+- `README.md` — "LAN의 다른 기기에서 설치" 2줄 섹션.
+
+`a1d272d` (state persistence):
+- `web_app.py` — `DMMController.STATE_FILE = .last_mode`, `_load_state()`, `_save_state()`, `__init__` 끝에서 load, `set_mode()` 끝에서 save.
+- `.gitignore` — `.last_mode` 추가.
 
 (이전 세션 변경 파일은 `dd8dd42` 인계 노트 참조 — `scpi.py`, `sdm30xx_time_qt6.py`, `multimeter.ini`, `requirements.txt`, `launch.py`, `run.sh|command|bat`, `tools/build-macos-app.sh`, `tools/ma`, `tools/dmm-recover` 등.)
 
@@ -32,6 +48,7 @@
 - [x] `./run.sh` 더블클릭 실행 (Linux) — venv stamp + uvicorn 자동 기동 확인.
 - [x] WebSocket polling 안정성 — 6 s 동안 24 frame ≈ 3.9 Hz, 끊김 없음.
 - [x] **자동 재연결 시뮬레이션** (bogus host 192.168.0.250) — `connected:False`, error frame 즉시 broadcast, 2 s 간격 retry 사이클 확인.
+- [x] **서버 재시작 후 모드 복원** — `.last_mode` 로 VAC → 서버 kill → 재시작 → `current_mode: VAC`, reading `+3.0180 mV  VAC Auto` 확인.
 - [ ] **실제 DMM OFF→ON 수동 검증** (사용자만 가능):
   1. PWA/브라우저로 접속, 임의 모드 선택 (예: VAC)
   2. DMM 후면 전원 OFF → status bar 빨강 `disconnected · last X s ago`, LCD `ERR`
@@ -54,12 +71,17 @@
 ### 핵심 파일/라인 (이번 세션 추가/변경)
 - `web_app.py:80` `DMMController` 클래스 docstring (재연결 모델 설명)
 - `web_app.py:101` `RECONNECT_BACKOFF_S = 2.0`
-- `web_app.py:118` `connect()` non-raise + replay mode
-- `web_app.py:167` `_apply_mode()` — set_mode + connect 공용
-- `web_app.py:208` `poll_once()` — error 시 `_connected=False`
-- `web_app.py:246` `poll_loop()` — 재연결 cadence 소유, error frame broadcast
-- `web_app.py:282` lifespan — 첫 connect 실패 시 last_reading seed
-- `web_app.py:338` `/api/info` — `connected` + `last_connect_ts`
+- `web_app.py:106` `STATE_FILE = .last_mode`
+- `web_app.py:124` `_load_state()` — 카탈로그 validation 후 default override
+- `web_app.py:136` `_save_state()` — plain text `MODE,RANGE`
+- `web_app.py:144` `connect()` non-raise + replay mode
+- `web_app.py:193` `_apply_mode()` — set_mode + connect 공용
+- `web_app.py:236` `poll_once()` — error 시 `_connected=False`
+- `web_app.py:274` `poll_loop()` — 재연결 cadence 소유, error frame broadcast
+- `web_app.py:310` lifespan — 첫 connect 실패 시 last_reading seed
+- `web_app.py:366` `/api/info` — `connected` + `last_connect_ts`
+- `launch.py:40` `lan_ip()` — UDP socket 트릭으로 LAN IP 감지
+- `launch.py:141` `--lan` 시 `[launch] LAN: http://<ip>:8000` 출력 (`flush=True`)
 - `web/app.js:109` `lastMsgClientMs`, `lastReadingHadError`
 - `web/app.js:132` `updateFreshness()` + `setInterval(500ms)` + dot e2e health
 - `web/app.js:392` `openWS()` — ws.onopen 시 fetchInfo() 재호출
@@ -75,7 +97,14 @@
 - `web/app.js:118` `chart` IIFE (circular buffer + draw + auto-scale)
 
 ### 커밋 히스토리 (최신순)
-- `e8e5bc6` **이번 세션** — auto-reconnect + mode replay + freshness UI
+- `a1d272d` **이번 세션** — `.last_mode` 영속화 (서버 재시작에도 모드 유지)
+- `3e9340b` launch.py LAN URL flush
+- `d4f5c95` re-apply ac20485 (사용자가 한번 revert 후 복구 요청)
+- `c2cf0af`, `28d4e9a` revert pair (잠시 되돌렸다가 다시 복구함 — 무시 가능)
+- `ac20485` launch.py LAN URL + README 2줄 안내
+- `d61950a` README 초기(긴) 안내 — 이후 `ac20485` 에서 축약됨
+- `1d51f36` HANDOFF 업데이트 (이전)
+- `e8e5bc6` **이번 세션 시작** — auto-reconnect + mode replay + freshness UI
 - `dd8dd42` 이전 handoff
 - `d7aed99` `tools/dmm-recover` 회복 도구
 - `5d20503` `/api/reading` + `tools/ma` + server 입력 + scale 토글
@@ -88,7 +117,7 @@
 
 ### 외부 연결
 - DMM: Siglent SDM3055 @ `192.168.0.177:5025` (raw SCPI). VXI-11(111)도 열려있지만 사용 안 함.
-- 리포지토리: https://github.com/withwave/DMM-Siglent-SDM (origin/main, 현재 HEAD `e8e5bc6`)
+- 리포지토리: https://github.com/withwave/DMM-Siglent-SDM (origin/main, 현재 HEAD `a1d272d`)
 - upstream(fork 원본): https://github.com/martin-bochum/DMM-Siglent-SDM (GPL)
 
 ### PWA 자동 갱신
